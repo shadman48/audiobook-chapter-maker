@@ -7,6 +7,11 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 TIME_RE=re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
 ROW_RE=re.compile(r"^\s*\d+\s+(\d\d:\d\d:\d\d)\s+(.+?)\s*$")
 KNOWN_COUNTS={'the elvenbane':25,'elvenbane':25,'elvenblood':10,'elvenborn':35}
+KNOWN_TOC_PAGES={
+    'elvenbane':[1,25,67,91,108,134,155,176,196,218,240,259,284,304,326,350,373,402,422,440,463,482,503,524,545],
+    'elvenblood':[1,27,58,94,125,163,203,235,271,302],
+    'elvenborn':[4,16,26,38,50,61,72,84,97,114,126,138,150,162,174,187,202,216,228,242,256,270,284,297,310,322,335,348,358,369,381,393,406,416,427],
+}
 NO_WINDOW=0x08000000 if sys.platform=='win32' else 0
 AMD_ENGINE_URL='https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/v1.8.4/whisper-v1.8.4-windows-vulkan-x64.zip'
 AMD_ENGINE_SHA256='e0d20a0f92e31b98adc0faf71172efc810b701e6391a9d858ca045bff26f77cd'
@@ -249,7 +254,7 @@ class App(tk.Tk):
         threading.Thread(target=work,daemon=True).start()
 
     def offer_retry(self,found,wanted,early=False):
-        detail=('No chapters were recognized in the first two hours, so the scan stopped early. This usually means the spoken headings need more accurate recognition.' if early else f'The scan found {found} of {wanted} expected chapters.')
+        detail=(f'Only {found} chapter(s) were recognized in the first two hours, so the scan stopped early. This usually means the recording uses unusual headings or needs more accurate recognition.' if early else f'The scan found {found} of {wanted} expected chapters.')
         if not messagebox.askyesno('Chapter check incomplete',detail+'\n\nWould you like to choose settings and try one more scan?'):
             self.job_status.set('Incomplete — use Fix Chapters or start again when ready'); return
         dialog=tk.Toplevel(self); dialog.title('Choose retry settings'); dialog.transient(self); dialog.grab_set(); dialog.resizable(False,False)
@@ -289,6 +294,9 @@ class App(tk.Tk):
                     raise FileNotFoundError('The V3 engine file detect_chapters_v2.py is missing. Extract every file from the V3 ZIP into the same folder.')
                 command=[sys.executable,'-u',str(script),str(p)]
                 if expected_total: command += ['--expected',expected_total]
+                normalized_name=' '.join(re.sub(r'[^a-z0-9 ]',' ',p.stem.lower()).split())
+                toc=next((pages for name,pages in KNOWN_TOC_PAGES.items() if name in normalized_name),None)
+                if toc: command += ['--toc-pages',','.join(map(str,toc))]
                 command += ['--tuning',tuning]
                 if tuning=='accurate' and self.device_mode.get() not in ('Require AMD GPU',): command += ['--model','small.en']
                 selected=self.device_mode.get();graphics=detect_graphics_names().lower()
@@ -303,9 +311,10 @@ class App(tk.Tk):
                 incomplete=None; stopped_early=False
                 for line in proc.stdout:
                     line=line.rstrip()
-                    if line.startswith('EARLY_NO_CHAPTERS:'):
+                    if line.startswith(('EARLY_NO_CHAPTERS:','EARLY_TOO_FEW_CHAPTERS:')):
                         stopped_early=True
-                        self.q.put(('chapter_count','Chapters found: 0 — stopped after first 2 hours'))
+                        pace=re.search(r':\s*(\d+)',line); pace_count=int(pace.group(1)) if pace else 0
+                        self.q.put(('chapter_count',f'Chapters found: {pace_count} — stopped after first 2 hours'))
                         continue
                     if line.startswith('INCOMPLETE_CHAPTERS:'):
                         match=re.search(r'(\d+)\s*/\s*(\d+)',line)
@@ -348,7 +357,7 @@ class App(tk.Tk):
                         except OSError: pass
                     self.q.put(('stopped','')); return
                 if code==5 and stopped_early:
-                    self.q.put(('retry_offer',(0,int(expected_total or 0),True))); return
+                    self.q.put(('retry_offer',(len(self.live_chapters),int(expected_total or 0),True))); return
                 if code==4 and incomplete:
                     self.q.put(('retry_offer',(incomplete[0],incomplete[1],False))); return
                 if code: raise RuntimeError('Creation did not finish successfully. See the log.')

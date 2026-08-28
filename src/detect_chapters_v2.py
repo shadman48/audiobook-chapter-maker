@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -26,6 +27,7 @@ NUMBER = (r"(?:\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|t
 HEADING = re.compile(rf"\b(?P<title>(?:chapter|book|part)\s+(?:the\s+)?{NUMBER}|prologue|epilogue|introduction|afterword)\b", re.I)
 SILENCE_END = re.compile(r"silence_end:\s*([0-9.]+)")
 SILENCE_START = re.compile(r"silence_start:\s*([0-9.]+)")
+PAGE_ANNOUNCEMENT = re.compile(r"\b(?:continuing\s+(?:on|at)\s+)?page\s+(\d{1,4})\b", re.I)
 
 
 def clock(seconds: float) -> str:
@@ -118,22 +120,22 @@ def score_candidate(items: list[dict], index: int, title: str, chunk_start: floa
 def select_sequence(candidates: list[dict], expected: int, duration: float) -> list[dict]:
     if not candidates: return []
     if not expected: return sorted((c for c in candidates if c["score"] >= 7), key=lambda c: c["time"])
-    average = duration / expected; minimum_gap = max(30, average * .08); states: list[tuple[float, list[dict]]] = []
-    first = [c for c in candidates if c["number"] == 1]
-    for candidate in first: states.append((candidate["score"] - min(2, candidate["time"] / max(1, average)), [candidate]))
-    best_states = states
-    for number in range(2, expected + 1):
-        options = [c for c in candidates if c["number"] == number]; new_states = []
-        for state_score, path in states:
-            for candidate in options:
-                gap = candidate["time"] - path[-1]["time"]
-                if gap < minimum_gap: continue
-                spacing_penalty = min(4, abs(gap - average) / max(1, average) * 2)
-                new_states.append((state_score + candidate["score"] - spacing_penalty, path + [candidate]))
-        states = sorted(new_states, key=lambda row: row[0], reverse=True)[:100]
-        if not states: break
-        best_states = states
-    return max(best_states, key=lambda row: (len(row[1]), row[0]))[1] if best_states else []
+    # Keep strong, chronologically ordered evidence even when one chapter is
+    # missed. The old implementation required an unbroken 1,2,3... chain, so a
+    # missing Chapter 2 hid every valid later chapter from the user.
+    usable = sorted((c for c in candidates if c["number"] and 1 <= c["number"] <= expected and c["score"] >= 7), key=lambda c: (c["time"], c["number"]))
+    if not usable: return []
+    average = duration / expected; states: list[tuple[int, float, list[dict]]] = []
+    for index, candidate in enumerate(usable):
+        timing_penalty = min(3.0, abs(candidate["time"] - (candidate["number"] - 1) * average) / max(1, average) * .35)
+        best = (1, candidate["score"] - timing_penalty, [candidate])
+        for prior_index in range(index):
+            count, score, path = states[prior_index]; prior = path[-1]
+            if prior["number"] >= candidate["number"] or prior["time"] >= candidate["time"]: continue
+            proposed = (count + 1, score + candidate["score"] - timing_penalty, path + [candidate])
+            if (proposed[0], proposed[1]) > (best[0], best[1]): best = proposed
+        states.append(best)
+    return max(states, key=lambda row: (row[0], row[1]))[2]
 
 
 def write_validation_report(path: Path, selected: list[dict], candidates: list[dict], expected: int) -> None:
@@ -143,6 +145,24 @@ def write_validation_report(path: Path, selected: list[dict], candidates: list[d
         lines += [f"{'SELECTED' if chosen else 'REJECTED'} — {candidate['title']} — {clock(candidate['time'])} — {confidence} ({candidate['score']})",
                   "Evidence: " + "; ".join(candidate["reasons"]), f"Before: {candidate['before']}", f"Heading: {candidate['text']}", f"After: {candidate['after']}", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def page_based_candidates(anchors: list[tuple[int, float]], toc_pages: list[int], allow_extrapolation: bool = False) -> list[dict]:
+    """Estimate chapter times from announced print-page positions."""
+    ordered = sorted({(page, stamp) for page, stamp in anchors})
+    if len(ordered) < 2: return []
+    results = []
+    for number, target in enumerate(toc_pages, 1):
+        pairs = [(a, b) for a, b in zip(ordered, ordered[1:]) if a[0] <= target <= b[0] and b[0] > a[0]]
+        if pairs: left, right = pairs[0]
+        elif allow_extrapolation and target < ordered[0][0]: left, right = ordered[0], ordered[1]
+        elif allow_extrapolation and target > ordered[-1][0]: left, right = ordered[-2], ordered[-1]
+        else: continue
+        ratio = (target - left[0]) / (right[0] - left[0]); stamp = left[1] + ratio * (right[1] - left[1])
+        results.append({"number": number, "title": f"Chapter {number}", "time": max(0.0, stamp), "score": 8,
+                        "reasons": [f"verified contents page {target}", f"interpolated between spoken page {left[0]} and page {right[0]}"],
+                        "before": "", "text": f"Estimated from announced print pages ({target})", "after": ""})
+    return results
 
 
 def find_candidates(source: Path, silence_db: int, silence_seconds: float) -> list[float]:
@@ -225,7 +245,7 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
-def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard") -> tuple[list[dict], list[dict], bool]:
+def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard", toc_pages: list[int] | None = None) -> tuple[list[dict], list[dict], bool]:
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
@@ -235,7 +255,7 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
         silences = detect_silence_ranges(source)
         chunk_seconds = 900 if tuning == "short-pauses" else 1800
         total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False; candidates: list[dict] = []
-        scan_started = time.monotonic(); audio_checked = 0.0; reported_numbers: set[int] = set()
+        scan_started = time.monotonic(); audio_checked = 0.0; reported_numbers: set[int] = set(); health_checked = False; page_anchors: list[tuple[int,float]] = []
         for chunk_index in range(total_chunks):
             chunk_start = chunk_index * chunk_seconds
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(chunk_start), "-i", str(source), "-t", str(min(chunk_seconds + 5, duration - chunk_start)), "-ac", "1", "-ar", "16000", str(chunk)], check=True, creationflags=NO_WINDOW)
@@ -250,13 +270,17 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             data = json.loads(output_base.with_suffix(".json").read_text(encoding="utf-8", errors="replace"))
             items = data.get("transcription", [])
             for item_index, item in enumerate(items):
+                page_match = PAGE_ANNOUNCEMENT.search(item.get("text", ""))
+                if page_match:
+                    page_anchors.append((int(page_match.group(1)), chunk_start + item.get("offsets", {}).get("from", 0) / 1000))
                 title = heading_title(item.get("text", ""), expected)
                 if title:
                     number = chapter_number(title)
                     if number is None:
                         offset = chunk_start + item.get("offsets", {}).get("from", 0) / 1000; add_heading(found, offset - .75, title)
                     else: candidates.append(score_candidate(items, item_index, title, chunk_start, silences))
-            preview = select_sequence(candidates, expected, duration)
+            page_candidates = page_based_candidates(page_anchors, toc_pages or [])
+            preview = select_sequence(candidates + page_candidates, expected, duration)
             for candidate in preview:
                 number = candidate["number"]
                 if number not in reported_numbers:
@@ -265,14 +289,20 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             print(f"LIVE_CHAPTER_COUNT: {len(preview)}/{expected or '?'}", flush=True)
             print(f"  Progress: {chunk_index + 1}/{total_chunks} audiobook sections checked", flush=True)
             audio_checked += min(chunk_seconds, duration - chunk_start)
-            if duration > 7200 and audio_checked >= 7200 and not preview:
-                print("EARLY_NO_CHAPTERS: 02:00:00", flush=True)
-                print("No numbered chapters were recognized in the first two hours, so this scan was stopped early.", flush=True)
-                return [], candidates, True
+            expected_so_far = expected * min(audio_checked, duration) / duration if expected else 0
+            minimum_progress = math.ceil(expected_so_far * .5) if expected else 1
+            if duration > 7200 and audio_checked >= 7200 and not health_checked:
+                health_checked = True
+                if len(preview) < minimum_progress:
+                    print(f"EARLY_TOO_FEW_CHAPTERS: {len(preview)}/{minimum_progress}/02:00:00", flush=True)
+                    print(f"Only {len(preview)} chapter(s) were recognized after two hours; at least {minimum_progress} were expected by this point. The scan was stopped early.", flush=True)
+                    return [], candidates, True
             elapsed = max(0.01, time.monotonic() - scan_started); speed = audio_checked / elapsed
             remaining = max(0.0, duration - audio_checked) / max(0.01, speed)
             print(f"  Transcription speed: {speed:.1f}x real-time | Scan remaining: {clock(remaining)}", flush=True)
         if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
+        page_candidates = page_based_candidates(page_anchors, toc_pages or [], allow_extrapolation=True)
+        candidates.extend(page_candidates)
         selected = select_sequence(candidates, expected, duration)
         for candidate in selected: add_heading(found, candidate["time"] - .75, candidate["title"])
         return selected, candidates, False
@@ -287,9 +317,11 @@ def main() -> int:
     ap.add_argument("--expected", type=int, default=0)
     ap.add_argument("--device", choices=("auto", "cuda", "amd", "cpu"), default="auto")
     ap.add_argument("--tuning", choices=("standard", "accurate", "short-pauses"), default="standard")
+    ap.add_argument("--toc-pages", default="", help="Comma-separated verified chapter start pages")
     ap.add_argument("--amd-cli", type=Path)
     ap.add_argument("--amd-model", type=Path)
     args = ap.parse_args()
+    toc_pages = [int(value) for value in args.toc_pages.split(",") if value.strip().isdigit()]
     source = args.input.resolve()
     if not source.is_file() or source.suffix.lower() != ".mp3": raise SystemExit("Input must be an existing MP3.")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"): raise SystemExit("FFmpeg and ffprobe are required.")
@@ -299,7 +331,7 @@ def main() -> int:
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
-        selected, candidates, stopped_early = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning)
+        selected, candidates, stopped_early = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning, toc_pages)
         report_file = source.with_name(source.stem + " - chapter validation.txt")
         write_validation_report(report_file, selected, candidates, args.expected)
         print(f"Validation report: {report_file}", flush=True)
