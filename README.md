@@ -17,6 +17,20 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Real progress and activity indicators, elapsed time, and estimated time remaining
 - Long-book warning, cancellation, and protection against accidental closing
 
+## Screenshots
+
+![Create Audiobook screen ready for a new MP3](docs/screenshots/create-audiobook-ready.png)
+
+*The Create Audiobook screen when first opened, ready for the user to choose an MP3 and optionally validate the expected chapter count.*
+
+![Audiobook processing with progress and time estimate](docs/screenshots/creating-audiobook-progress.png)
+
+*An audiobook being processed, with the current stage, progress bar, elapsed time, estimated remaining time, detected headings, and Cancel button visible.*
+
+![Fix Chapters screen ready to load an audiobook](docs/screenshots/fix-chapters-ready.png)
+
+*The Fix Chapters screen, where users can load their `.m4b` and chapter-list files, then add, edit, delete, or save repaired chapter markers.*
+
 ## Windows quick start
 
 1. Download or clone the repository.
