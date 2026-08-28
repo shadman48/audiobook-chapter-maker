@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from faster_whisper import WhisperModel
@@ -112,11 +114,14 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
         temp_dir = Path(temp); chunk = temp_dir / "chunk.wav"; output_base = temp_dir / "transcription"
+        feeder_threads = min(12, max(4, (os.cpu_count() or 8) // 2))
+        print(f"AMD tuning: using {feeder_threads} CPU feeder threads.", flush=True)
         chunk_seconds = 1800; total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False
+        scan_started = time.monotonic(); audio_checked = 0.0
         for chunk_index in range(total_chunks):
             chunk_start = chunk_index * chunk_seconds
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(chunk_start), "-i", str(source), "-t", str(min(chunk_seconds + 5, duration - chunk_start)), "-ac", "1", "-ar", "16000", str(chunk)], check=True, creationflags=NO_WINDOW)
-            command = [str(cli), "-m", str(model), "-f", str(chunk), "-l", "en", "-ojf", "-of", str(output_base), "-pp"]
+            command = [str(cli), "-m", str(model), "-f", str(chunk), "-l", "en", "-t", str(feeder_threads), "-ojf", "-of", str(output_base), "-pp"]
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", creationflags=NO_WINDOW)
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -130,6 +135,10 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
                     offset = chunk_start + item.get("offsets", {}).get("from", 0) / 1000
                     add_heading(found, offset - 0.75, match.group("title").title())
             print(f"  Progress: {chunk_index + 1}/{total_chunks} audiobook sections checked", flush=True)
+            audio_checked += min(chunk_seconds, duration - chunk_start)
+            elapsed = max(0.01, time.monotonic() - scan_started); speed = audio_checked / elapsed
+            remaining = max(0.0, duration - audio_checked) / max(0.01, speed)
+            print(f"  Transcription speed: {speed:.1f}x real-time | Scan remaining: {clock(remaining)}", flush=True)
         if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
 
 

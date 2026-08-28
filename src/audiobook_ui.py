@@ -98,10 +98,11 @@ class App(tk.Tk):
         actions=ttk.Frame(self.create); actions.pack(fill='x',pady=(18,10))
         self.start_button=ttk.Button(actions,text='Start - Create Audio Book With Chapters',style='Accent.TButton',command=self.start_create); self.start_button.pack(side='left')
         self.cancel_button=ttk.Button(actions,text='Cancel',command=self.cancel_job,state='disabled'); self.cancel_button.pack(side='left',padx=8)
-        self.job_status=tk.StringVar(value='Ready'); self.time_status=tk.StringVar(value='')
+        self.job_status=tk.StringVar(value='Ready'); self.time_status=tk.StringVar(value=''); self.performance_status=tk.StringVar(value='')
         ttk.Label(self.create,textvariable=self.job_status).pack(anchor='w')
         self.progress=ttk.Progressbar(self.create,mode='determinate',maximum=100); self.progress.pack(fill='x',pady=(5,3))
         ttk.Label(self.create,textvariable=self.time_status,foreground='#666').pack(anchor='w',pady=(0,8))
+        ttk.Label(self.create,textvariable=self.performance_status,foreground='#555').pack(anchor='w',pady=(0,6))
         self.log=tk.Text(self.create,height=10,state='disabled',wrap='word'); self.log.pack(fill='both',expand=True)
 
     def make_fix(self):
@@ -123,7 +124,8 @@ class App(tk.Tk):
                 elif kind=='done': messagebox.showinfo('Finished',val)
                 elif kind=='error': messagebox.showerror('Problem',val)
                 elif kind=='lookup_info': messagebox.showinfo('Chapter lookup',val)
-                elif kind=='gpu_info': messagebox.showinfo('NVIDIA GPU test',val)
+                elif kind=='gpu_info': messagebox.showinfo('GPU test',val)
+                elif kind=='performance': self.performance_status.set(val)
                 elif kind=='progress': self.set_progress(**val)
                 elif kind=='stopped': self.finish_job(cancelled=True)
                 elif kind=='job_done': self.finish_job(cancelled=False); messagebox.showinfo('Finished',val)
@@ -253,6 +255,7 @@ class App(tk.Tk):
         warning=f'This audiobook is {hours:.1f} hours long.\n\nLarge books can take a long time to process. Keep your computer plugged in and prevent it from sleeping.\n\nStart now?'
         if not messagebox.askokcancel('Before you start',warning): return
         self.running=True; self.cancelled=False; self.started_at=time.time(); self.last_percent=0
+        self.performance_status.set('')
         self.start_button.configure(state='disabled'); self.cancel_button.configure(state='normal'); self.set_progress(status='Starting…',indeterminate=True)
         self.write('Starting faster chapter scan…')
         def work():
@@ -277,11 +280,15 @@ class App(tk.Tk):
                     if line.startswith('Step 1/3:'): self.q.put(('progress',{'status':'Finding likely chapter breaks…','indeterminate':True}))
                     elif line.startswith('Step 2/3:'): self.q.put(('progress',{'percent':10,'status':'Listening near likely chapter breaks…'}))
                     elif line.startswith('ACTIVE PROCESSOR:'): self.q.put(('progress',{'percent':10,'status':'Using '+line.split(':',1)[1].strip()}))
+                    elif line.strip().startswith('AMD tuning:'): self.q.put(('performance',line.strip()))
+                    elif line.strip().startswith('Transcription speed:'): self.q.put(('performance',line.strip()))
                     elif line.startswith('Thorough fallback:'): self.q.put(('progress',{'status':'Running a thorough full-book scan…','indeterminate':True}))
                     elif line.startswith('Thorough scan:'): self.q.put(('progress',{'status':'Scanning the full book with AMD Vulkan…','indeterminate':True}))
                     elif line.strip().startswith('Progress:'):
                         m=re.search(r'(\d+)/(\d+)',line)
-                        if m: self.q.put(('progress',{'percent':10+70*int(m.group(1))/max(1,int(m.group(2))),'status':f'Checking location {m.group(1)} of {m.group(2)}…'}))
+                        if m:
+                            label='Processing audiobook section' if 'audiobook sections' in line else 'Checking location'
+                            self.q.put(('progress',{'percent':10+70*int(m.group(1))/max(1,int(m.group(2))),'status':f'{label} {m.group(1)} of {m.group(2)}…'}))
                     elif line.startswith('Step 3/3:'): self.q.put(('progress',{'percent':82,'status':'Creating your .m4b file…'}))
                     elif line.startswith('out_time='):
                         try: self.q.put(('progress',{'percent':82+18*seconds(line.split('=',1)[1])/book_seconds,'status':'Creating your .m4b file…'}))
