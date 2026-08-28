@@ -54,6 +54,7 @@ def ensure_amd_engine(progress):
                 target=(engine_dir/member.filename).resolve()
                 if engine_dir.resolve() not in target.parents and target!=engine_dir.resolve(): raise RuntimeError('Unsafe file found in the AMD engine package.')
             bundle.extractall(engine_dir)
+        archive.unlink(missing_ok=True)
     if not model.is_file() or sha256(model).lower()!=AMD_MODEL_SHA256: download_verified(AMD_MODEL_URL,model,AMD_MODEL_SHA256,'Downloading English speech model',progress)
     return cli,model
 def detect_graphics_names():
