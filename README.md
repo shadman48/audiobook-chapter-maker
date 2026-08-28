@@ -7,11 +7,12 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Clean desktop interface for nontechnical users
 - Faster local Whisper scanning around likely chapter breaks
 - Local speech recognition after the initial model download
-- Optional expected-chapter lookup and manual validation
+- Standalone chapter-reference lookup using MP3 tags, filenames/folders, Open Library, Google Books, and a downloadable community catalogue
+- Local reference caching with chapter numbers, titles, and printed starting pages when available
 - Missing-chapter reporting
 - One scan per run—there are no automatic repeat scans
 - If validation is incomplete, a simple popup offers optional higher-accuracy or shorter-pause retry settings
-- Early safety stop when no numbered chapters are recognized in the first two hours
+- Early safety stop when chapter discovery is far behind the expected pace after two hours
 - Recognition of word-only announcements such as `Seven.` as well as `Chapter Seven`
 - Gap-tolerant validation: one missed heading no longer hides every later chapter
 - Verified print-page fallback for supported editions that announce page positions instead of chapter headings
@@ -70,7 +71,7 @@ Use the visible **Report a Bug** button in the app. It opens a guided GitHub iss
 
 ## Privacy
 
-Audio processing runs locally. The application does not upload audiobook audio. The optional book-information lookup sends only an inferred book title to Google Books.
+Audio processing and opening-audio identification run locally. The application never uploads audiobook audio and does not call ChatGPT or another cloud AI service. The optional book-information lookup sends text metadata inferred from MP3 tags, filenames/folders, or the locally transcribed opening to the project catalogue, Open Library, and Google Books. Successful references are cached under Local AppData.
 
 ## Current status
 

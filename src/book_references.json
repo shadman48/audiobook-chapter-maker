@@ -1,0 +1,49 @@
+{
+  "format_version": 1,
+  "books": [
+    {
+      "title": "The Elvenbane",
+      "authors": ["Andre Norton", "Mercedes Lackey"],
+      "aliases": ["Elvenbane", "Halfblood Chronicles 01"],
+      "chapters": [
+        {"number": 1, "page": 1}, {"number": 2, "page": 25}, {"number": 3, "page": 67}, {"number": 4, "page": 91}, {"number": 5, "page": 108},
+        {"number": 6, "page": 134}, {"number": 7, "page": 155}, {"number": 8, "page": 176}, {"number": 9, "page": 196}, {"number": 10, "page": 218},
+        {"number": 11, "page": 240}, {"number": 12, "page": 259}, {"number": 13, "page": 284}, {"number": 14, "page": 304}, {"number": 15, "page": 326},
+        {"number": 16, "page": 350}, {"number": 17, "page": 373}, {"number": 18, "page": 402}, {"number": 19, "page": 422}, {"number": 20, "page": 440},
+        {"number": 21, "page": 463}, {"number": 22, "page": 482}, {"number": 23, "page": 503}, {"number": 24, "page": 524}, {"number": 25, "page": 545}
+      ],
+      "source": "Google Books published contents",
+      "source_url": "https://books.google.com/books/about/The_Elvenbane.html?id=UL6b4HFXLCoC",
+      "verified": true
+    },
+    {
+      "title": "Elvenblood",
+      "authors": ["Andre Norton", "Mercedes Lackey"],
+      "aliases": ["Halfblood Chronicles 02"],
+      "chapters": [
+        {"number": 1, "page": 1}, {"number": 2, "page": 27}, {"number": 3, "page": 58}, {"number": 4, "page": 94}, {"number": 5, "page": 125},
+        {"number": 6, "page": 163}, {"number": 7, "page": 203}, {"number": 8, "page": 235}, {"number": 9, "page": 271}, {"number": 10, "page": 302}
+      ],
+      "source": "Google Books published contents",
+      "source_url": "https://books.google.com/books/about/Elvenblood.html?id=nQcTn4cUFMUC",
+      "verified": true
+    },
+    {
+      "title": "Elvenborn",
+      "authors": ["Andre Norton", "Mercedes Lackey"],
+      "aliases": ["Halfblood Chronicles 03"],
+      "chapters": [
+        {"number": 1, "page": 4}, {"number": 2, "page": 16}, {"number": 3, "page": 26}, {"number": 4, "page": 38}, {"number": 5, "page": 50},
+        {"number": 6, "page": 61}, {"number": 7, "page": 72}, {"number": 8, "page": 84}, {"number": 9, "page": 97}, {"number": 10, "page": 114},
+        {"number": 11, "page": 126}, {"number": 12, "page": 138}, {"number": 13, "page": 150}, {"number": 14, "page": 162}, {"number": 15, "page": 174},
+        {"number": 16, "page": 187}, {"number": 17, "page": 202}, {"number": 18, "page": 216}, {"number": 19, "page": 228}, {"number": 20, "page": 242},
+        {"number": 21, "page": 256}, {"number": 22, "page": 270}, {"number": 23, "page": 284}, {"number": 24, "page": 297}, {"number": 25, "page": 310},
+        {"number": 26, "page": 322}, {"number": 27, "page": 335}, {"number": 28, "page": 348}, {"number": 29, "page": 358}, {"number": 30, "page": 369},
+        {"number": 31, "page": 381}, {"number": 32, "page": 393}, {"number": 33, "page": 406}, {"number": 34, "page": 416}, {"number": 35, "page": 427}
+      ],
+      "source": "Google Books published contents",
+      "source_url": "https://books.google.com/books?vid=ISBN9780812571233",
+      "verified": true
+    }
+  ]
+}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import math
 import os
@@ -165,6 +166,22 @@ def page_based_candidates(anchors: list[tuple[int, float]], toc_pages: list[int]
     return results
 
 
+def reference_title_match(text: str, chapters: list[dict]) -> dict | None:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    for chapter in chapters:
+        title = str(chapter.get("title") or "").strip()
+        title_words = re.findall(r"[a-z0-9]+", re.sub(r"^chapter\s+\w+\s*[:—-]?\s*", "", title, flags=re.I).lower())
+        if len(title_words) < 2: continue
+        target = " ".join(title_words)
+        if len(words) < len(title_words): continue
+        for start in range(len(words) - len(title_words) + 1):
+            sample = " ".join(words[start:start + len(title_words)])
+            if target == sample or difflib.SequenceMatcher(None, target, sample).ratio() >= .84:
+                number = int(chapter.get("number") or 0)
+                if number: return {"number":number,"title":f"Chapter {number} — {title}"}
+    return None
+
+
 def find_candidates(source: Path, silence_db: int, silence_seconds: float) -> list[float]:
     print(f"Step 1/3: finding pauses of at least {silence_seconds:g} seconds...")
     proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(source), "-af", f"silencedetect=noise={silence_db}dB:d={silence_seconds}", "-f", "null", "-"], capture_output=True, text=True, creationflags=NO_WINDOW)
@@ -214,7 +231,7 @@ def add_heading(found: list[tuple[float, str]], stamp: float, title: str) -> boo
     return True
 
 
-def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float], expected: int = 0) -> bool:
+def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float], expected: int = 0, reference_chapters: list[dict] | None = None) -> bool:
     with tempfile.TemporaryDirectory(prefix="audiobook-scan-") as temp:
         clip = Path(temp) / "candidate.wav"
         todo = [p for p in candidates if not any(abs(p-old) < 7 for old in scanned)]
@@ -227,6 +244,8 @@ def inspect_candidates(model, source: Path, duration: float, candidates: list[fl
             for seg in segments:
                 title = heading_title(seg.text, expected)
                 if title: add_heading(found, start + seg.start - 0.5, title)
+                title_match = reference_title_match(seg.text, reference_chapters or [])
+                if title_match: add_heading(found, start + seg.start - 0.5, title_match["title"])
             if duration > 7200 and point >= 7200 and chapter_count(found) == 0:
                 print("EARLY_NO_CHAPTERS: 02:00:00", flush=True)
                 print("No numbered chapters were recognized in the first two hours, so this scan was stopped early.", flush=True)
@@ -245,7 +264,7 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
-def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard", toc_pages: list[int] | None = None) -> tuple[list[dict], list[dict], bool]:
+def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard", toc_pages: list[int] | None = None, reference_chapters: list[dict] | None = None) -> tuple[list[dict], list[dict], bool]:
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
@@ -279,6 +298,10 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
                     if number is None:
                         offset = chunk_start + item.get("offsets", {}).get("from", 0) / 1000; add_heading(found, offset - .75, title)
                     else: candidates.append(score_candidate(items, item_index, title, chunk_start, silences))
+                title_match = reference_title_match(item.get("text", ""), reference_chapters or [])
+                if title_match:
+                    candidates.append({**title_match,"time":chunk_start + item.get("offsets",{}).get("from",0)/1000,"score":11,
+                                       "reasons":["verified chapter title matched local transcript"],"before":"","text":item.get("text","").strip(),"after":""})
             page_candidates = page_based_candidates(page_anchors, toc_pages or [])
             preview = select_sequence(candidates + page_candidates, expected, duration)
             for candidate in preview:
@@ -318,10 +341,13 @@ def main() -> int:
     ap.add_argument("--device", choices=("auto", "cuda", "amd", "cpu"), default="auto")
     ap.add_argument("--tuning", choices=("standard", "accurate", "short-pauses"), default="standard")
     ap.add_argument("--toc-pages", default="", help="Comma-separated verified chapter start pages")
+    ap.add_argument("--reference-json", default="[]", help="Structured chapter reference supplied by the desktop app")
     ap.add_argument("--amd-cli", type=Path)
     ap.add_argument("--amd-model", type=Path)
     args = ap.parse_args()
     toc_pages = [int(value) for value in args.toc_pages.split(",") if value.strip().isdigit()]
+    try: reference_chapters = json.loads(args.reference_json)
+    except ValueError: reference_chapters = []
     source = args.input.resolve()
     if not source.is_file() or source.suffix.lower() != ".mp3": raise SystemExit("Input must be an existing MP3.")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"): raise SystemExit("FFmpeg and ffprobe are required.")
@@ -331,7 +357,7 @@ def main() -> int:
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
-        selected, candidates, stopped_early = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning, toc_pages)
+        selected, candidates, stopped_early = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning, toc_pages, reference_chapters)
         report_file = source.with_name(source.stem + " - chapter validation.txt")
         write_validation_report(report_file, selected, candidates, args.expected)
         print(f"Validation report: {report_file}", flush=True)
@@ -365,7 +391,7 @@ def main() -> int:
         threshold = .7 if args.tuning == "short-pauses" else args.silence_seconds
         candidates = find_candidates(source, args.silence_db, threshold)
         print("Single scan: inspecting likely locations with Whisper...", flush=True)
-        if inspect_candidates(model, source, duration, candidates, found, scanned, args.expected):
+        if inspect_candidates(model, source, duration, candidates, found, scanned, args.expected, reference_chapters):
             return 5
         count = chapter_count(found)
         if args.expected:

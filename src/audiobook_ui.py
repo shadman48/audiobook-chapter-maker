@@ -1,23 +1,18 @@
 from __future__ import annotations
-import hashlib, json, os, queue, re, shutil, subprocess, sys, threading, time, urllib.parse, urllib.request, webbrowser, zipfile
+import hashlib, json, os, queue, re, shutil, subprocess, sys, tempfile, threading, time, urllib.parse, urllib.request, webbrowser, zipfile
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 TIME_RE=re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
 ROW_RE=re.compile(r"^\s*\d+\s+(\d\d:\d\d:\d\d)\s+(.+?)\s*$")
-KNOWN_COUNTS={'the elvenbane':25,'elvenbane':25,'elvenblood':10,'elvenborn':35}
-KNOWN_TOC_PAGES={
-    'elvenbane':[1,25,67,91,108,134,155,176,196,218,240,259,284,304,326,350,373,402,422,440,463,482,503,524,545],
-    'elvenblood':[1,27,58,94,125,163,203,235,271,302],
-    'elvenborn':[4,16,26,38,50,61,72,84,97,114,126,138,150,162,174,187,202,216,228,242,256,270,284,297,310,322,335,348,358,369,381,393,406,416,427],
-}
 NO_WINDOW=0x08000000 if sys.platform=='win32' else 0
 AMD_ENGINE_URL='https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/v1.8.4/whisper-v1.8.4-windows-vulkan-x64.zip'
 AMD_ENGINE_SHA256='e0d20a0f92e31b98adc0faf71172efc810b701e6391a9d858ca045bff26f77cd'
 AMD_MODEL_URL='https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'
 AMD_MODEL_SHA256='a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002'
 AMD_MODEL_SIZE=147964211
+COMMUNITY_CATALOG_URL='https://raw.githubusercontent.com/shadman48/audiobook-chapter-maker/main/src/book_references.json'
 
 def seconds(text):
     m=TIME_RE.match(text.strip())
@@ -36,6 +31,103 @@ def sha256(path):
     return digest.hexdigest()
 def app_data_dir():
     return Path(os.environ.get('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'AudiobookChapterMaker'
+def normalized(text): return ' '.join(re.sub(r'[^a-z0-9 ]',' ',text.lower()).split())
+def reference_books():
+    books=[]
+    for path in (Path(__file__).with_name('book_references.json'),app_data_dir()/'community-references.json',app_data_dir()/'reference-cache.json'):
+        try: books.extend(json.loads(path.read_text(encoding='utf-8')).get('books',[]))
+        except (OSError,ValueError): pass
+    return books
+def refresh_reference_catalog():
+    destination=app_data_dir()/'community-references.json'; destination.parent.mkdir(parents=True,exist_ok=True)
+    request=urllib.request.Request(COMMUNITY_CATALOG_URL,headers={'User-Agent':'AudiobookChapterMaker/0.3'})
+    with urllib.request.urlopen(request,timeout=15) as response: data=response.read()
+    parsed=json.loads(data.decode('utf-8'))
+    if not isinstance(parsed.get('books'),list): raise ValueError('The community reference catalogue has an invalid format.')
+    destination.write_bytes(data)
+def mp3_identity(path):
+    tags={}
+    try:
+        result=subprocess.run(['ffprobe','-v','error','-show_entries','format_tags=title,artist,author,album,composer','-of','json',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
+        tags={str(k).lower():str(v) for k,v in json.loads(result.stdout).get('format',{}).get('tags',{}).items()}
+    except Exception: pass
+    title=tags.get('title') or path.stem
+    author=tags.get('author') or tags.get('artist') or tags.get('composer') or ''
+    context=' '.join([title,author,tags.get('album',''),path.stem]+[part for part in path.parts[-4:-1]])
+    return {'title':title,'author':author,'context':context,'tags':tags}
+def match_reference(path):
+    identity=mp3_identity(path); haystack=normalized(identity['context']); best=None
+    for book in reference_books():
+        names=[book.get('title','')]+book.get('aliases',[])
+        score=max((len(normalized(name)) for name in names if normalized(name) and normalized(name) in haystack),default=0)
+        if score and (best is None or score>best[0]): best=(score,book)
+    return best[1] if best else None
+def save_cached_reference(book):
+    path=app_data_dir()/'reference-cache.json'; path.parent.mkdir(parents=True,exist_ok=True)
+    existing=[]
+    try: existing=json.loads(path.read_text(encoding='utf-8')).get('books',[])
+    except (OSError,ValueError): pass
+    key=(normalized(book.get('title','')),tuple(book.get('authors',[])))
+    existing=[item for item in existing if (normalized(item.get('title','')),tuple(item.get('authors',[])))!=key]
+    existing.append(book); path.write_text(json.dumps({'format_version':1,'books':existing},indent=2),encoding='utf-8')
+def fetch_json(url):
+    request=urllib.request.Request(url,headers={'User-Agent':'AudiobookChapterMaker/0.3 (https://github.com/shadman48/audiobook-chapter-maker)'})
+    with urllib.request.urlopen(request,timeout=15) as response: return json.load(response)
+def toc_entries(raw):
+    chapters=[]
+    for index,item in enumerate(raw or [],1):
+        if isinstance(item,str): title=item; page=None
+        else:
+            title=str(item.get('title') or item.get('label') or '').strip(); page=item.get('pagenum') or item.get('page')
+        match=re.search(r'\bchapter\s+([0-9]{1,3})\b',title,re.I); number=int(match.group(1)) if match else index
+        page_match=re.search(r'\d+',str(page or '')); page_number=int(page_match.group()) if page_match else None
+        if title: chapters.append({'number':number,'title':title,'page':page_number})
+    return chapters
+def openlibrary_reference(identity):
+    clean_title=' '.join(re.sub(r'\[[^]]+\]',' ',identity['title']).split())
+    terms={'title':clean_title,'author':identity['author']} if identity['author'] else {'q':clean_title}
+    url='https://openlibrary.org/search.json?'+urllib.parse.urlencode(terms|{'fields':'key,title,author_name,edition_key,isbn','limit':5})
+    results=fetch_json(url).get('docs',[])
+    for result in results:
+        work_key=result.get('key','')
+        records=[]
+        if work_key:
+            try: records.append(fetch_json('https://openlibrary.org'+work_key+'.json'))
+            except Exception: pass
+            try: records.extend(fetch_json('https://openlibrary.org'+work_key+'/editions.json?limit=20').get('entries',[]))
+            except Exception: pass
+        for record in records:
+            chapters=toc_entries(record.get('table_of_contents'))
+            if chapters:
+                return {'title':result.get('title') or identity['title'],'authors':result.get('author_name',[]),'aliases':[],
+                        'isbn':(result.get('isbn') or [None])[0],'chapters':chapters,'source':'Open Library API',
+                        'source_url':'https://openlibrary.org'+work_key,'verified':False}
+    return None
+def google_identity(identity):
+    query=re.sub(r'\[[^]]+\]',' ',identity['title'])
+    if identity['author']: query+=' '+identity['author']
+    query=' '.join(query.split())
+    data=fetch_json('https://www.googleapis.com/books/v1/volumes?'+urllib.parse.urlencode({'q':query,'maxResults':5}))
+    items=data.get('items') or []
+    if not items:return identity
+    info=items[0].get('volumeInfo',{}); updated=dict(identity)
+    updated['title']=info.get('title') or identity['title']; updated['author']=' '.join(info.get('authors') or [identity['author']]).strip()
+    updated['google_volume_id']=items[0].get('id'); return updated
+def opening_identity(path, identity):
+    """Use local Whisper only when filename/tags did not locate a reference."""
+    from faster_whisper import WhisperModel
+    with tempfile.TemporaryDirectory(prefix='audiobook-identity-') as folder:
+        clip=Path(folder)/'opening.wav'
+        subprocess.run(['ffmpeg','-v','error','-y','-i',str(path),'-t','180','-ac','1','-ar','16000',str(clip)],check=True,creationflags=NO_WINDOW)
+        model=WhisperModel('base.en',device='cpu',compute_type='int8')
+        text=' '.join(segment.text for segment in model.transcribe(str(clip),language='en',vad_filter=True)[0])
+    patterns=(r'\bthis is\s+(.{2,100}?)\s+by\s+(.{2,80}?)(?:\.|,|narrated|read by)',r'\b(.{2,100}?)\s+by\s+(.{2,80}?)(?:\.|,|narrated|read by)')
+    for pattern in patterns:
+        match=re.search(pattern,text,re.I)
+        if match:
+            updated=dict(identity); updated['title']=match.group(1).strip(' "'); updated['author']=match.group(2).strip(' "'); updated['opening_transcript']=text
+            return updated
+    updated=dict(identity); updated['opening_transcript']=text; return updated
 def download_verified(url,destination,expected_hash,label,progress):
     destination.parent.mkdir(parents=True,exist_ok=True); partial=destination.with_suffix(destination.suffix+'.download')
     request=urllib.request.Request(url,headers={'User-Agent':'Audiobook-Chapter-Maker'})
@@ -74,7 +166,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title('Audiobook Maker V3'); self.geometry('780x620'); self.minsize(700,540)
         self.option_add('*Font',('Segoe UI',10)); self.q=queue.Queue(); self.chapters=[]
-        self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0; self.live_chapters=set()
+        self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0; self.live_chapters=set(); self.current_reference=None
         style=ttk.Style(self); style.configure('Title.TLabel',font=('Segoe UI Semibold',18)); style.configure('Accent.TButton',font=('Segoe UI Semibold',10))
         header=ttk.Frame(self); header.pack(fill='x',padx=24,pady=(20,6))
         ttk.Label(header,text='Audiobook Maker',style='Title.TLabel').pack(side='left')
@@ -134,6 +226,7 @@ class App(tk.Tk):
                 elif kind=='done': messagebox.showinfo('Finished',val)
                 elif kind=='error': messagebox.showerror('Problem',val)
                 elif kind=='lookup_info': messagebox.showinfo('Chapter lookup',val)
+                elif kind=='reference_candidate': self.confirm_reference(val)
                 elif kind=='gpu_info': messagebox.showinfo('GPU test',val)
                 elif kind=='performance': self.performance_status.set(val)
                 elif kind=='progress': self.set_progress(**val)
@@ -190,6 +283,16 @@ class App(tk.Tk):
         n=simpledialog.askinteger('Expected chapters','How many numbered chapters should the book contain?',minvalue=1,maxvalue=999)
         if n: self.expected.set(str(n))
 
+    def apply_reference(self,book):
+        self.current_reference=book; count=len(book.get('chapters',[])); quality='verified reference' if book.get('verified') else book.get('source','online reference')
+        self.expected.set(f"{count} — {book.get('title','Book')} ({quality})")
+
+    def confirm_reference(self,book):
+        authors=', '.join(book.get('authors',[])) or 'Unknown author'; count=len(book.get('chapters',[]))
+        if messagebox.askyesno('Confirm book reference',f"Is this the correct book and edition?\n\n{book.get('title','Unknown title')}\n{authors}\n{count} chapters\nSource: {book.get('source','Unknown')}\n\nUse this chapter reference?"):
+            save_cached_reference(book); self.apply_reference(book)
+        else: self.expected.set('Unknown'); self.current_reference=None
+
     def report_bug(self):
         webbrowser.open('https://github.com/shadman48/audiobook-chapter-maker/issues/new?template=bug_report.yml')
 
@@ -234,23 +337,35 @@ class App(tk.Tk):
                 self.q.put(('progress',{'percent':0,'status':'AMD GPU setup required'}))
         threading.Thread(target=work,daemon=True).start()
     def lookup(self):
-        p=Path(self.source.get()); title=re.sub(r'\[[^]]+\]',' ',p.stem); title=re.sub(r'\b(Mercedes Lackey|Andre Norton)\b',' ',title,flags=re.I); title=' '.join(title.split())
-        normalized=' '.join(re.sub(r'[^a-z0-9 ]',' ',title.lower()).split())
-        local=next(((name,count) for name,count in KNOWN_COUNTS.items() if name in normalized),None)
-        if local:
-            self.expected.set(f'{local[1]} — {title} (verified reference)')
-            return
+        p=Path(self.source.get())
+        if not p.is_file(): return messagebox.showerror('Choose a file','Please choose an audiobook MP3 first.')
+        self.job_status.set('Looking up the book and its table of contents…')
         def work():
             try:
-                url='https://www.googleapis.com/books/v1/volumes?q='+urllib.parse.quote('intitle:'+title)+'&maxResults=5'
-                data=json.load(urllib.request.urlopen(url,timeout=12)); best=(data.get('items') or [])[0]['volumeInfo']; preview=best.get('previewLink')
-                if not preview: raise ValueError('No table of contents was available.')
-                html=urllib.request.urlopen(preview,timeout=12).read().decode('utf-8','ignore'); nums=[int(x) for x in re.findall(r'Chapter\s+(\d{1,3})',html,re.I)]
-                if not nums: raise ValueError('The book was found, but its chapter count was not published.')
-                self.q.put(('expected',f'{max(nums)} — {best.get("title",title)}'))
+                try: refresh_reference_catalog()
+                except Exception: pass
+                local=match_reference(p)
+                if local:
+                    self.q.put(('reference_candidate',local)); self.q.put(('progress',{'percent':0,'status':'Reference found — please confirm'})); return
+                identity=mp3_identity(p); book=None
+                try: book=openlibrary_reference(identity)
+                except Exception: pass
+                if not book:
+                    try: identity=google_identity(identity); book=openlibrary_reference(identity)
+                    except Exception: pass
+                if not book:
+                    self.q.put(('progress',{'status':'Listening to the opening locally to identify the book…','indeterminate':True}))
+                    identity=opening_identity(p,identity)
+                    try: book=openlibrary_reference(identity)
+                    except Exception: pass
+                    if not book:
+                        try: identity=google_identity(identity); book=openlibrary_reference(identity)
+                        except Exception: pass
+                if not book: raise ValueError('The book was identified, but no structured table of contents was available from the supported APIs.')
+                self.q.put(('reference_candidate',book)); self.q.put(('progress',{'percent':0,'status':'Reference found — please confirm'}))
             except Exception as e:
                 detail='The online book service is temporarily busy.' if '429' in str(e) else 'No published chapter count was found.'
-                self.q.put(('lookup_info',detail+' You can enter the expected count manually; audiobook creation is unaffected.'))
+                self.q.put(('lookup_info',detail+'\n\n'+str(e)+'\n\nYou can enter the expected count manually or provide a matching EPUB in a future version.'))
         threading.Thread(target=work,daemon=True).start()
 
     def offer_retry(self,found,wanted,early=False):
@@ -272,10 +387,9 @@ class App(tk.Tk):
     def start_create(self,tuning='standard',confirm=True):
         p=Path(self.source.get())
         if not p.is_file(): return messagebox.showerror('Choose a file','Please choose an audiobook MP3.')
-        if not re.match(r'(\d+)',self.expected.get()):
-            normalized=' '.join(re.sub(r'[^a-z0-9 ]',' ',p.stem.lower()).split())
-            local=next(((name,count) for name,count in KNOWN_COUNTS.items() if name in normalized),None)
-            if local: self.expected.set(f'{local[1]} — {p.stem} (verified reference)')
+        reference=match_reference(p)
+        if reference: self.apply_reference(reference)
+        else: self.current_reference=None
         try: book_seconds=duration(p)
         except Exception as e: return messagebox.showerror('Cannot read audiobook','The audiobook duration could not be read.\n\n'+str(e))
         hours=book_seconds/3600
@@ -294,9 +408,10 @@ class App(tk.Tk):
                     raise FileNotFoundError('The V3 engine file detect_chapters_v2.py is missing. Extract every file from the V3 ZIP into the same folder.')
                 command=[sys.executable,'-u',str(script),str(p)]
                 if expected_total: command += ['--expected',expected_total]
-                normalized_name=' '.join(re.sub(r'[^a-z0-9 ]',' ',p.stem.lower()).split())
-                toc=next((pages for name,pages in KNOWN_TOC_PAGES.items() if name in normalized_name),None)
-                if toc: command += ['--toc-pages',','.join(map(str,toc))]
+                chapters=(self.current_reference or {}).get('chapters',[])
+                toc=[item.get('page') for item in chapters if item.get('page') is not None]
+                if toc and len(toc)==len(chapters): command += ['--toc-pages',','.join(map(str,toc))]
+                if chapters: command += ['--reference-json',json.dumps(chapters,separators=(',',':'))]
                 command += ['--tuning',tuning]
                 if tuning=='accurate' and self.device_mode.get() not in ('Require AMD GPU',): command += ['--model','small.en']
                 selected=self.device_mode.get();graphics=detect_graphics_names().lower()
