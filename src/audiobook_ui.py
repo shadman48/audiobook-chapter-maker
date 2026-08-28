@@ -43,7 +43,11 @@ class App(tk.Tk):
         box=ttk.LabelFrame(self.create,text='Validation',padding=12); box.pack(fill='x')
         ttk.Label(box,text='Expected chapters:').grid(row=0,column=0,sticky='w'); ttk.Label(box,textvariable=self.expected).grid(row=0,column=1,sticky='w',padx=8)
         ttk.Button(box,text='Look up online',command=self.lookup).grid(row=0,column=2,padx=8); ttk.Button(box,text='Enter manually',command=self.manual_expected).grid(row=0,column=3)
-        ttk.Label(box,text='Online counts are advisory and never prevent creation.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
+        ttk.Label(box,text='The expected count guides automatic retries. Leave Unknown if unsure.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
+        ttk.Label(box,text='Processor:').grid(row=2,column=0,sticky='w',pady=(10,0))
+        self.device_mode=tk.StringVar(value='Automatic (GPU when available)')
+        ttk.Combobox(box,textvariable=self.device_mode,state='readonly',width=29,values=('Automatic (GPU when available)','Require NVIDIA GPU','CPU only')).grid(row=2,column=1,columnspan=2,sticky='w',padx=8,pady=(10,0))
+        ttk.Button(box,text='Test NVIDIA GPU',command=self.test_gpu).grid(row=2,column=3,sticky='w',pady=(10,0))
         actions=ttk.Frame(self.create); actions.pack(fill='x',pady=(18,10))
         self.start_button=ttk.Button(actions,text='Start - Create Audio Book With Chapters',style='Accent.TButton',command=self.start_create); self.start_button.pack(side='left')
         self.cancel_button=ttk.Button(actions,text='Cancel',command=self.cancel_job,state='disabled'); self.cancel_button.pack(side='left',padx=8)
@@ -72,6 +76,7 @@ class App(tk.Tk):
                 elif kind=='done': messagebox.showinfo('Finished',val)
                 elif kind=='error': messagebox.showerror('Problem',val)
                 elif kind=='lookup_info': messagebox.showinfo('Chapter lookup',val)
+                elif kind=='gpu_info': messagebox.showinfo('NVIDIA GPU test',val)
                 elif kind=='progress': self.set_progress(**val)
                 elif kind=='stopped': self.finish_job(cancelled=True)
                 elif kind=='job_done': self.finish_job(cancelled=False); messagebox.showinfo('Finished',val)
@@ -124,6 +129,24 @@ class App(tk.Tk):
     def manual_expected(self):
         n=simpledialog.askinteger('Expected chapters','How many numbered chapters should the book contain?',minvalue=1,maxvalue=999)
         if n: self.expected.set(str(n))
+
+    def test_gpu(self):
+        if self.running: return messagebox.showinfo('NVIDIA GPU test','Wait for the current audiobook job to finish or cancel it first.')
+        self.job_status.set('Testing NVIDIA GPU…')
+        def work():
+            try:
+                import ctranslate2, numpy as np
+                from faster_whisper import WhisperModel
+                count=ctranslate2.get_cuda_device_count()
+                if count < 1: raise RuntimeError('No CUDA-capable NVIDIA GPU was detected.')
+                model=WhisperModel('base.en',device='cuda',compute_type='float16')
+                segments,_=model.transcribe(np.zeros(16000,dtype=np.float32),language='en'); list(segments)
+                self.q.put(('gpu_info',f'GPU test passed. Whisper can use {count} NVIDIA CUDA device(s).'))
+                self.q.put(('progress',{'percent':0,'status':'NVIDIA GPU ready'}))
+            except Exception as e:
+                self.q.put(('gpu_info','GPU acceleration is not ready, so Automatic mode will use the CPU.\n\n'+str(e)+'\n\nFaster-whisper currently requires an NVIDIA CUDA GPU, CUDA 12 cuBLAS, and cuDNN 9.'))
+                self.q.put(('progress',{'percent':0,'status':'GPU unavailable — CPU fallback available'}))
+        threading.Thread(target=work,daemon=True).start()
     def lookup(self):
         p=Path(self.source.get()); title=re.sub(r'\[[^]]+\]',' ',p.stem); title=re.sub(r'\b(Mercedes Lackey|Andre Norton)\b',' ',title,flags=re.I); title=' '.join(title.split())
         normalized=' '.join(re.sub(r'[^a-z0-9 ]',' ',title.lower()).split())
@@ -147,6 +170,10 @@ class App(tk.Tk):
     def start_create(self):
         p=Path(self.source.get())
         if not p.is_file(): return messagebox.showerror('Choose a file','Please choose an audiobook MP3.')
+        if not re.match(r'(\d+)',self.expected.get()):
+            normalized=' '.join(re.sub(r'[^a-z0-9 ]',' ',p.stem.lower()).split())
+            local=next(((name,count) for name,count in KNOWN_COUNTS.items() if name in normalized),None)
+            if local: self.expected.set(f'{local[1]} — {p.stem} (verified reference)')
         try: book_seconds=duration(p)
         except Exception as e: return messagebox.showerror('Cannot read audiobook','The audiobook duration could not be read.\n\n'+str(e))
         hours=book_seconds/3600
@@ -160,12 +187,19 @@ class App(tk.Tk):
                 script=Path(__file__).with_name('detect_chapters_v2.py')
                 if not script.is_file():
                     raise FileNotFoundError('The V3 engine file detect_chapters_v2.py is missing. Extract every file from the V3 ZIP into the same folder.')
-                proc=subprocess.Popen([sys.executable,'-u',str(script),str(p)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
+                command=[sys.executable,'-u',str(script),str(p)]
+                expected_match=re.match(r'(\d+)',self.expected.get())
+                if expected_match: command += ['--expected',expected_match.group(1)]
+                device={'Automatic (GPU when available)':'auto','Require NVIDIA GPU':'cuda','CPU only':'cpu'}[self.device_mode.get()]
+                command += ['--device',device]
+                proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
                 self.job_proc=proc
                 for line in proc.stdout:
                     line=line.rstrip(); self.write(line)
                     if line.startswith('Step 1/3:'): self.q.put(('progress',{'status':'Finding likely chapter breaks…','indeterminate':True}))
                     elif line.startswith('Step 2/3:'): self.q.put(('progress',{'percent':10,'status':'Listening near likely chapter breaks…'}))
+                    elif line.startswith('ACTIVE PROCESSOR:'): self.q.put(('progress',{'percent':10,'status':'Using '+line.split(':',1)[1].strip()}))
+                    elif line.startswith('Thorough fallback:'): self.q.put(('progress',{'status':'Running a thorough full-book scan…','indeterminate':True}))
                     elif line.strip().startswith('Progress:'):
                         m=re.search(r'(\d+)/(\d+)',line)
                         if m: self.q.put(('progress',{'percent':10+70*int(m.group(1))/max(1,int(m.group(2))),'status':f'Checking location {m.group(1)} of {m.group(2)}…'}))

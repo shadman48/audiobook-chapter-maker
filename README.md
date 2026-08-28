@@ -9,6 +9,8 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Local speech recognition after the initial model download
 - Optional expected-chapter lookup and manual validation
 - Missing-chapter reporting
+- Automatic retry with increasingly sensitive pause detection when the expected chapter count is not met
+- Thorough full-book fallback scan and validation failure protection
 - Add, edit, rename, or remove chapter markers
 - Scan one minute near an approximate timestamp to recover a missing chapter
 - Repair an existing `.m4b` without re-encoding its audio
@@ -46,6 +48,14 @@ The first run checks for Python and FFmpeg and creates a private Python environm
 - Python 3.9 or newer; Python 3.11 or 3.12 is recommended
 - FFmpeg and ffprobe
 - Several GB of free disk space
+
+## GPU acceleration
+
+The Processor menu offers **Automatic**, **Require NVIDIA GPU**, and **CPU only**. The **Test NVIDIA GPU** button performs a real Whisper transcription test. Automatic clearly reports the active processor; Require NVIDIA GPU stops with setup guidance instead of silently using the CPU.
+
+Current faster-whisper GPU releases require an NVIDIA CUDA-capable GPU together with CUDA 12 cuBLAS and cuDNN 9 libraries available on the Windows PATH. An ordinary GPU driver alone may not be sufficient. See the [faster-whisper GPU requirements](https://github.com/SYSTRAN/faster-whisper#gpu).
+
+AMD and Intel graphics are not supported by faster-whisper's CUDA backend; those systems use the CPU.
 
 ## Privacy
 

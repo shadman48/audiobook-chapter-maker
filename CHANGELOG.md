@@ -9,4 +9,7 @@
 - Added a silent Windows launcher.
 - Added progress, elapsed time, estimated time remaining, and live status messages.
 - Added a long-book warning, Cancel button, and accidental-close protection.
+- Added expected-count quality gating and increasingly sensitive automatic retries.
+- Added a thorough full-book fallback scan and refusal to create known-incomplete results.
+- Added Automatic, Require NVIDIA GPU, and CPU-only modes with a real CUDA execution test.
 - Preserved source audio and avoided software-version labels in generated filenames.

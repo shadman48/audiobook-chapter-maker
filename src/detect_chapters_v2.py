@@ -52,14 +52,58 @@ def find_candidates(source: Path, silence_db: int, silence_seconds: float) -> li
     return kept
 
 
-def choose_device() -> tuple[str, str]:
+def choose_device(requested: str) -> tuple[str, str, str]:
+    if requested == "cpu":
+        return "cpu", "int8", "CPU selected by user."
     try:
         import ctranslate2
         if ctranslate2.get_cuda_device_count() > 0:
-            return "cuda", "float16"
-    except Exception:
-        pass
-    return "cpu", "int8"
+            return "cuda", "float16", "NVIDIA CUDA device detected."
+    except Exception as exc:
+        if requested == "cuda":
+            raise RuntimeError(f"NVIDIA GPU was required, but CUDA detection failed: {exc}") from exc
+    if requested == "cuda":
+        raise RuntimeError("NVIDIA GPU was required, but no CUDA-capable device was detected.")
+    return "cpu", "int8", "No usable NVIDIA CUDA device was detected."
+
+
+def chapter_count(found: list[tuple[float, str]]) -> int:
+    return len({title.lower() for _, title in found if title.lower().startswith("chapter ")})
+
+
+def add_heading(found: list[tuple[float, str]], stamp: float, title: str) -> bool:
+    for old_stamp, old_title in found:
+        if abs(stamp - old_stamp) < 20 or old_title.lower() == title.lower():
+            return False
+    found.append((max(0.0, stamp), title)); found.sort(key=lambda row: row[0])
+    print(f"  Found {title:<24} at {clock(stamp)}", flush=True)
+    return True
+
+
+def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float]) -> None:
+    with tempfile.TemporaryDirectory(prefix="audiobook-scan-") as temp:
+        clip = Path(temp) / "candidate.wav"
+        todo = [p for p in candidates if not any(abs(p-old) < 7 for old in scanned)]
+        total = len(todo)
+        for index, point in enumerate(todo, 1):
+            scanned.append(point); start = max(0.0, point - 2.5); length = min(18.0, duration - start)
+            if length <= 0: continue
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(start), "-i", str(source), "-t", str(length), "-ac", "1", "-ar", "16000", str(clip)], check=True, creationflags=NO_WINDOW)
+            segments, _ = model.transcribe(str(clip), language="en", beam_size=3, vad_filter=True, condition_on_previous_text=False)
+            for seg in segments:
+                match = HEADING.search(seg.text)
+                if match: add_heading(found, start + seg.start - 0.5, match.group("title").title())
+            if index == 1 or index % 25 == 0 or index == total:
+                print(f"  Progress: {index}/{max(1,total)} locations checked", flush=True)
+
+
+def full_scan(model, source: Path, found: list[tuple[float, str]]) -> None:
+    print("Thorough fallback: scanning the complete audiobook because validation did not pass.", flush=True)
+    segments, _ = model.transcribe(str(source), language="en", beam_size=5, vad_filter=True, condition_on_previous_text=False)
+    for index, seg in enumerate(segments, 1):
+        match = HEADING.search(seg.text)
+        if match: add_heading(found, seg.start - 0.75, match.group("title").title())
+        if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
 def main() -> int:
@@ -68,45 +112,56 @@ def main() -> int:
     ap.add_argument("--model", default="base.en")
     ap.add_argument("--silence-db", type=int, default=-38)
     ap.add_argument("--silence-seconds", type=float, default=1.5)
+    ap.add_argument("--expected", type=int, default=0)
+    ap.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     args = ap.parse_args()
     source = args.input.resolve()
     if not source.is_file() or source.suffix.lower() != ".mp3": raise SystemExit("Input must be an existing MP3.")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"): raise SystemExit("FFmpeg and ffprobe are required.")
 
     duration = probe_duration(source)
-    candidates = find_candidates(source, args.silence_db, args.silence_seconds)
-    device, compute = choose_device()
-    print(f"Step 2/3: checking likely locations with Whisper {args.model} on {device.upper()}...")
+    device, compute, device_note = choose_device(args.device)
+    print(f"Hardware check: {device_note}", flush=True)
+    print(f"Step 2/3: loading Whisper {args.model} on {device.upper()}...", flush=True)
     try:
         model = WhisperModel(args.model, device=device, compute_type=compute)
+        if device == "cuda":
+            import numpy as np
+            test_segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), language="en")
+            list(test_segments)  # Force execution; transcription is lazy.
     except Exception as exc:
-        if device != "cuda":
+        if device != "cuda" or args.device == "cuda":
             raise
-        print(f"  NVIDIA acceleration is unavailable ({exc}). Falling back to CPU.")
+        print(f"GPU test failed: {exc}", flush=True)
+        print("Falling back to CPU. Select 'Require NVIDIA GPU' in the app to prevent fallback.", flush=True)
         device, compute = "cpu", "int8"
         model = WhisperModel(args.model, device=device, compute_type=compute)
+    print(f"ACTIVE PROCESSOR: {'NVIDIA GPU (CUDA)' if device == 'cuda' else 'CPU'}", flush=True)
     found: list[tuple[float, str]] = []
-    with tempfile.TemporaryDirectory(prefix="audiobook-v2-") as temp:
-        clip = Path(temp) / "candidate.wav"
-        total = len(candidates)
-        for index, point in enumerate(candidates, 1):
-            start = max(0.0, point - 2.5)
-            length = min(18.0, duration - start)
-            if length <= 0: continue
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(start), "-i", str(source), "-t", str(length), "-ac", "1", "-ar", "16000", str(clip)], check=True, creationflags=NO_WINDOW)
-            segments, _ = model.transcribe(str(clip), language="en", beam_size=3, vad_filter=True, condition_on_previous_text=False)
-            text = " ".join(seg.text.strip() for seg in segments)
-            match = HEADING.search(text)
-            if match:
-                title = match.group("title").title()
-                stamp = max(0.0, point - 0.75)
-                if not found or stamp - found[-1][0] >= 20:
-                    found.append((stamp, title)); print(f"  Found {title:<24} at {clock(stamp)}")
-            if index == 1 or index % 25 == 0 or index == total:
-                print(f"  Progress: {index}/{total} locations checked", flush=True)
+    scanned: list[float] = []
+    thresholds = [args.silence_seconds, 1.0, 0.7, 0.4]
+    for pass_number, threshold in enumerate(dict.fromkeys(thresholds), 1):
+        candidates = find_candidates(source, args.silence_db, threshold)
+        print(f"Pause scan pass {pass_number}: inspecting new locations with Whisper...", flush=True)
+        inspect_candidates(model, source, duration, candidates, found, scanned)
+        count = chapter_count(found)
+        if args.expected:
+            print(f"Validation after pass {pass_number}: {count} of {args.expected} numbered chapters detected.", flush=True)
+            if count >= args.expected: break
+            print("Validation did not pass; retrying with a more sensitive pause setting.", flush=True)
+        elif count >= 3:
+            break
+
+    if args.expected and chapter_count(found) < args.expected:
+        full_scan(model, source, found)
+        count = chapter_count(found)
+        print(f"Final validation: {count} of {args.expected} numbered chapters detected.", flush=True)
+        if count < args.expected:
+            print("Validation failed even after the thorough scan. No .m4b file was created.", flush=True)
+            return 4
 
     if not found:
-        print("No headings were found. Try V1 for a slower full-book scan.")
+        print("No headings were found. No .m4b file was created.")
         return 3
     if found[0][0] > 15: found.insert(0, (0.0, "Opening"))
     else: found[0] = (0.0, found[0][1])
