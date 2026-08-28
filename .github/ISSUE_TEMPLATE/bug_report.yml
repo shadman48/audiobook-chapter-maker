@@ -1,0 +1,52 @@
+name: Report a bug
+description: Tell us about a problem with Audiobook Chapter Maker
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Please do not upload copyrighted audiobook files.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe what you expected and what happened instead.
+      placeholder: I selected an audiobook and then…
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: App log or error message
+      description: Copy the relevant text from the app's progress log. Remove personal paths if desired.
+      render: text
+  - type: dropdown
+    id: processor
+    attributes:
+      label: Processor mode
+      options:
+        - Automatic
+        - NVIDIA GPU
+        - AMD GPU (Vulkan)
+        - CPU only
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card
+      placeholder: Example: AMD Radeon RX 7800 XT
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Example: Windows 11 24H2
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I have not attached copyrighted audiobook audio.
+          required: true

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, queue, re, subprocess, sys, threading, time, urllib.parse, urllib.request
+import json, queue, re, subprocess, sys, threading, time, urllib.parse, urllib.request, webbrowser
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -26,7 +26,9 @@ class App(tk.Tk):
         self.option_add('*Font',('Segoe UI',10)); self.q=queue.Queue(); self.chapters=[]
         self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0
         style=ttk.Style(self); style.configure('Title.TLabel',font=('Segoe UI Semibold',18)); style.configure('Accent.TButton',font=('Segoe UI Semibold',10))
-        ttk.Label(self,text='Audiobook Maker',style='Title.TLabel').pack(anchor='w',padx=24,pady=(20,6))
+        header=ttk.Frame(self); header.pack(fill='x',padx=24,pady=(20,6))
+        ttk.Label(header,text='Audiobook Maker',style='Title.TLabel').pack(side='left')
+        ttk.Button(header,text='Report a Bug',command=self.report_bug).pack(side='right')
         ttk.Label(self,text='Create and repair your chaptered .m4b audiobook file. Your source files are never changed.').pack(anchor='w',padx=24)
         tabs=ttk.Notebook(self); tabs.pack(fill='both',expand=True,padx=20,pady=16)
         self.create=ttk.Frame(tabs,padding=18); self.fix=ttk.Frame(tabs,padding=18); tabs.add(self.create,text='  Create Audiobook  '); tabs.add(self.fix,text='  Fix Chapters  ')
@@ -45,9 +47,10 @@ class App(tk.Tk):
         ttk.Button(box,text='Look up online',command=self.lookup).grid(row=0,column=2,padx=8); ttk.Button(box,text='Enter manually',command=self.manual_expected).grid(row=0,column=3)
         ttk.Label(box,text='The expected count guides automatic retries. Leave Unknown if unsure.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
         ttk.Label(box,text='Processor:').grid(row=2,column=0,sticky='w',pady=(10,0))
-        self.device_mode=tk.StringVar(value='Automatic (GPU when available)')
-        ttk.Combobox(box,textvariable=self.device_mode,state='readonly',width=29,values=('Automatic (GPU when available)','Require NVIDIA GPU','CPU only')).grid(row=2,column=1,columnspan=2,sticky='w',padx=8,pady=(10,0))
-        ttk.Button(box,text='Test NVIDIA GPU',command=self.test_gpu).grid(row=2,column=3,sticky='w',pady=(10,0))
+        self.device_mode=tk.StringVar(value='Automatic (NVIDIA or CPU)'); self.amd_cli=tk.StringVar(); self.amd_model=tk.StringVar()
+        ttk.Combobox(box,textvariable=self.device_mode,state='readonly',width=29,values=('Automatic (NVIDIA or CPU)','Require NVIDIA GPU','AMD GPU (Vulkan)','CPU only')).grid(row=2,column=1,columnspan=2,sticky='w',padx=8,pady=(10,0))
+        ttk.Button(box,text='Test selected GPU',command=self.test_gpu).grid(row=2,column=3,sticky='w',pady=(10,0))
+        ttk.Button(box,text='Configure AMD…',command=self.configure_amd).grid(row=3,column=1,sticky='w',padx=8,pady=(8,0))
         actions=ttk.Frame(self.create); actions.pack(fill='x',pady=(18,10))
         self.start_button=ttk.Button(actions,text='Start - Create Audio Book With Chapters',style='Accent.TButton',command=self.start_create); self.start_button.pack(side='left')
         self.cancel_button=ttk.Button(actions,text='Cancel',command=self.cancel_job,state='disabled'); self.cancel_button.pack(side='left',padx=8)
@@ -130,8 +133,18 @@ class App(tk.Tk):
         n=simpledialog.askinteger('Expected chapters','How many numbered chapters should the book contain?',minvalue=1,maxvalue=999)
         if n: self.expected.set(str(n))
 
+    def report_bug(self):
+        webbrowser.open('https://github.com/shadman48/audiobook-chapter-maker/issues/new?template=bug_report.yml')
+
+    def configure_amd(self):
+        cli=filedialog.askopenfilename(title='Choose the Vulkan whisper-cli.exe',filetypes=[('whisper-cli','whisper-cli.exe'),('Executable','*.exe')])
+        if not cli:return
+        model=filedialog.askopenfilename(title='Choose a GGML English Whisper model',filetypes=[('GGML model','ggml-*.bin'),('Model file','*.bin')])
+        if model:self.amd_cli.set(cli);self.amd_model.set(model);messagebox.showinfo('AMD configured','AMD Vulkan files selected for this app session. Use Test selected GPU to verify them.')
+
     def test_gpu(self):
         if self.running: return messagebox.showinfo('NVIDIA GPU test','Wait for the current audiobook job to finish or cancel it first.')
+        if self.device_mode.get()=='AMD GPU (Vulkan)': return self.test_amd_gpu()
         self.job_status.set('Testing NVIDIA GPU…')
         def work():
             try:
@@ -146,6 +159,28 @@ class App(tk.Tk):
             except Exception as e:
                 self.q.put(('gpu_info','GPU acceleration is not ready, so Automatic mode will use the CPU.\n\n'+str(e)+'\n\nFaster-whisper currently requires an NVIDIA CUDA GPU, CUDA 12 cuBLAS, and cuDNN 9.'))
                 self.q.put(('progress',{'percent':0,'status':'GPU unavailable — CPU fallback available'}))
+        threading.Thread(target=work,daemon=True).start()
+
+    def test_amd_gpu(self):
+        if not Path(self.amd_cli.get()).is_file() or not Path(self.amd_model.get()).is_file():
+            self.configure_amd()
+            if not Path(self.amd_cli.get()).is_file() or not Path(self.amd_model.get()).is_file(): return
+        self.job_status.set('Testing AMD Vulkan GPU…')
+        def work():
+            try:
+                import tempfile
+                with tempfile.TemporaryDirectory() as d:
+                    wav=Path(d)/'silence.wav'
+                    subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=16000:cl=mono','-t','1','-y',str(wav)],check=True,creationflags=NO_WINDOW)
+                    result=subprocess.run([self.amd_cli.get(),'-m',self.amd_model.get(),'-f',str(wav),'-l','en'],capture_output=True,text=True,creationflags=NO_WINDOW,timeout=120)
+                details=(result.stdout+'\n'+result.stderr)
+                if result.returncode: raise RuntimeError(details[-1200:])
+                if not re.search(r'vulkan|ggml_vulkan',details,re.I): raise RuntimeError('The executable ran, but did not report a Vulkan backend. Choose a Vulkan-enabled whisper.cpp build.')
+                self.q.put(('gpu_info','AMD GPU test passed. whisper.cpp reported an active Vulkan backend.'))
+                self.q.put(('progress',{'percent':0,'status':'AMD Vulkan GPU ready'}))
+            except Exception as e:
+                self.q.put(('gpu_info','AMD Vulkan acceleration is not ready.\n\n'+str(e)))
+                self.q.put(('progress',{'percent':0,'status':'AMD GPU setup required'}))
         threading.Thread(target=work,daemon=True).start()
     def lookup(self):
         p=Path(self.source.get()); title=re.sub(r'\[[^]]+\]',' ',p.stem); title=re.sub(r'\b(Mercedes Lackey|Andre Norton)\b',' ',title,flags=re.I); title=' '.join(title.split())
@@ -190,8 +225,11 @@ class App(tk.Tk):
                 command=[sys.executable,'-u',str(script),str(p)]
                 expected_match=re.match(r'(\d+)',self.expected.get())
                 if expected_match: command += ['--expected',expected_match.group(1)]
-                device={'Automatic (GPU when available)':'auto','Require NVIDIA GPU':'cuda','CPU only':'cpu'}[self.device_mode.get()]
+                device={'Automatic (NVIDIA or CPU)':'auto','Require NVIDIA GPU':'cuda','AMD GPU (Vulkan)':'amd','CPU only':'cpu'}[self.device_mode.get()]
                 command += ['--device',device]
+                if device=='amd':
+                    if not Path(self.amd_cli.get()).is_file() or not Path(self.amd_model.get()).is_file(): raise RuntimeError('Configure and test the AMD Vulkan files first.')
+                    command += ['--amd-cli',self.amd_cli.get(),'--amd-model',self.amd_model.get()]
                 proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
                 self.job_proc=proc
                 for line in proc.stdout:
@@ -200,6 +238,7 @@ class App(tk.Tk):
                     elif line.startswith('Step 2/3:'): self.q.put(('progress',{'percent':10,'status':'Listening near likely chapter breaks…'}))
                     elif line.startswith('ACTIVE PROCESSOR:'): self.q.put(('progress',{'percent':10,'status':'Using '+line.split(':',1)[1].strip()}))
                     elif line.startswith('Thorough fallback:'): self.q.put(('progress',{'status':'Running a thorough full-book scan…','indeterminate':True}))
+                    elif line.startswith('Thorough scan:'): self.q.put(('progress',{'status':'Scanning the full book with AMD Vulkan…','indeterminate':True}))
                     elif line.strip().startswith('Progress:'):
                         m=re.search(r'(\d+)/(\d+)',line)
                         if m: self.q.put(('progress',{'percent':10+70*int(m.group(1))/max(1,int(m.group(2))),'status':f'Checking location {m.group(1)} of {m.group(2)}…'}))

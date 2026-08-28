@@ -18,6 +18,7 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Silent Windows launcher with progress shown inside the app
 - Real progress and activity indicators, elapsed time, and estimated time remaining
 - Long-book warning, cancellation, and protection against accidental closing
+- Visible Report a Bug button linked to a guided GitHub issue form
 
 ## Screenshots
 
@@ -55,7 +56,13 @@ The Processor menu offers **Automatic**, **Require NVIDIA GPU**, and **CPU only*
 
 Current faster-whisper GPU releases require an NVIDIA CUDA-capable GPU together with CUDA 12 cuBLAS and cuDNN 9 libraries available on the Windows PATH. An ordinary GPU driver alone may not be sufficient. See the [faster-whisper GPU requirements](https://github.com/SYSTRAN/faster-whisper#gpu).
 
-AMD and Intel graphics are not supported by faster-whisper's CUDA backend; those systems use the CPU.
+AMD acceleration uses a Vulkan-enabled `whisper.cpp` executable and a GGML English model selected through **Configure AMD**. The app performs a real one-second Vulkan test before processing. AMD mode currently performs a thorough full-book scan rather than pause-guided faster-whisper scanning.
+
+Official whisper.cpp supports Vulkan as a cross-vendor GPU backend. Prebuilt Windows Vulkan availability is still evolving, so the app does not automatically download an unverified binary. See the [whisper.cpp Vulkan documentation](https://github.com/ggml-org/whisper.cpp#vulkan-gpu-support) and the [AMD-focused build project](https://github.com/lemonade-sdk/whisper.cpp-amd).
+
+## Reporting bugs
+
+Use the visible **Report a Bug** button in the app. It opens a guided GitHub issue form in the browser so reports appear directly in this repository. A GitHub account is required to submit the issue. Do not attach copyrighted audiobook audio.
 
 ## Privacy
 

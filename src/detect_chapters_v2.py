@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -106,6 +107,29 @@ def full_scan(model, source: Path, found: list[tuple[float, str]]) -> None:
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
+def amd_full_scan(cli: Path, model: Path, source: Path, found: list[tuple[float, str]]) -> None:
+    print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
+    print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
+    with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
+        output_base = Path(temp) / "transcription"
+        command = [str(cli), "-m", str(model), "-f", str(source), "-l", "en", "-ojf", "-of", str(output_base), "-pp"]
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", creationflags=NO_WINDOW)
+        backend_seen = False
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line.rstrip(), flush=True)
+            if re.search(r"vulkan|ggml_vulkan", line, re.I): backend_seen = True
+        if proc.wait(): raise RuntimeError("AMD whisper.cpp transcription failed.")
+        if not backend_seen: raise RuntimeError("The selected whisper.cpp executable did not report an active Vulkan backend.")
+        json_path = output_base.with_suffix(".json")
+        data = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+        for item in data.get("transcription", []):
+            match = HEADING.search(item.get("text", ""))
+            if match:
+                offset = item.get("offsets", {}).get("from", 0) / 1000
+                add_heading(found, offset - 0.75, match.group("title").title())
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("input", type=Path)
@@ -113,52 +137,64 @@ def main() -> int:
     ap.add_argument("--silence-db", type=int, default=-38)
     ap.add_argument("--silence-seconds", type=float, default=1.5)
     ap.add_argument("--expected", type=int, default=0)
-    ap.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
+    ap.add_argument("--device", choices=("auto", "cuda", "amd", "cpu"), default="auto")
+    ap.add_argument("--amd-cli", type=Path)
+    ap.add_argument("--amd-model", type=Path)
     args = ap.parse_args()
     source = args.input.resolve()
     if not source.is_file() or source.suffix.lower() != ".mp3": raise SystemExit("Input must be an existing MP3.")
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"): raise SystemExit("FFmpeg and ffprobe are required.")
 
     duration = probe_duration(source)
-    device, compute, device_note = choose_device(args.device)
-    print(f"Hardware check: {device_note}", flush=True)
-    print(f"Step 2/3: loading Whisper {args.model} on {device.upper()}...", flush=True)
-    try:
-        model = WhisperModel(args.model, device=device, compute_type=compute)
-        if device == "cuda":
-            import numpy as np
-            test_segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), language="en")
-            list(test_segments)  # Force execution; transcription is lazy.
-    except Exception as exc:
-        if device != "cuda" or args.device == "cuda":
-            raise
-        print(f"GPU test failed: {exc}", flush=True)
-        print("Falling back to CPU. Select 'Require NVIDIA GPU' in the app to prevent fallback.", flush=True)
-        device, compute = "cpu", "int8"
-        model = WhisperModel(args.model, device=device, compute_type=compute)
-    print(f"ACTIVE PROCESSOR: {'NVIDIA GPU (CUDA)' if device == 'cuda' else 'CPU'}", flush=True)
-    found: list[tuple[float, str]] = []
-    scanned: list[float] = []
-    thresholds = [args.silence_seconds, 1.0, 0.7, 0.4]
-    for pass_number, threshold in enumerate(dict.fromkeys(thresholds), 1):
-        candidates = find_candidates(source, args.silence_db, threshold)
-        print(f"Pause scan pass {pass_number}: inspecting new locations with Whisper...", flush=True)
-        inspect_candidates(model, source, duration, candidates, found, scanned)
-        count = chapter_count(found)
-        if args.expected:
-            print(f"Validation after pass {pass_number}: {count} of {args.expected} numbered chapters detected.", flush=True)
-            if count >= args.expected: break
-            print("Validation did not pass; retrying with a more sensitive pause setting.", flush=True)
-        elif count >= 3:
-            break
-
-    if args.expected and chapter_count(found) < args.expected:
-        full_scan(model, source, found)
-        count = chapter_count(found)
-        print(f"Final validation: {count} of {args.expected} numbered chapters detected.", flush=True)
-        if count < args.expected:
-            print("Validation failed even after the thorough scan. No .m4b file was created.", flush=True)
+    if args.device == "amd":
+        if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
+            raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
+        found: list[tuple[float, str]] = []
+        amd_full_scan(args.amd_cli, args.amd_model, source, found)
+        if args.expected and chapter_count(found) < args.expected:
+            print(f"Final validation: {chapter_count(found)} of {args.expected} numbered chapters detected.", flush=True)
+            print("Validation failed. No .m4b file was created.", flush=True)
             return 4
+    else:
+        found = []
+        device, compute, device_note = choose_device(args.device)
+        print(f"Hardware check: {device_note}", flush=True)
+        print(f"Step 2/3: loading Whisper {args.model} on {device.upper()}...", flush=True)
+        try:
+            model = WhisperModel(args.model, device=device, compute_type=compute)
+            if device == "cuda":
+                import numpy as np
+                test_segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), language="en")
+                list(test_segments)  # Force execution; transcription is lazy.
+        except Exception as exc:
+            if device != "cuda" or args.device == "cuda":
+                raise
+            print(f"GPU test failed: {exc}", flush=True)
+            print("Falling back to CPU. Select 'Require NVIDIA GPU' in the app to prevent fallback.", flush=True)
+            device, compute = "cpu", "int8"
+            model = WhisperModel(args.model, device=device, compute_type=compute)
+        print(f"ACTIVE PROCESSOR: {'NVIDIA GPU (CUDA)' if device == 'cuda' else 'CPU'}", flush=True)
+        scanned: list[float] = []
+        thresholds = [args.silence_seconds, 1.0, 0.7, 0.4]
+        for pass_number, threshold in enumerate(dict.fromkeys(thresholds), 1):
+            candidates = find_candidates(source, args.silence_db, threshold)
+            print(f"Pause scan pass {pass_number}: inspecting new locations with Whisper...", flush=True)
+            inspect_candidates(model, source, duration, candidates, found, scanned)
+            count = chapter_count(found)
+            if args.expected:
+                print(f"Validation after pass {pass_number}: {count} of {args.expected} numbered chapters detected.", flush=True)
+                if count >= args.expected: break
+                print("Validation did not pass; retrying with a more sensitive pause setting.", flush=True)
+            elif count >= 3:
+                break
+
+        if args.expected and chapter_count(found) < args.expected:
+            full_scan(model, source, found)
+            count = chapter_count(found)
+            print(f"Final validation: {count} of {args.expected} numbered chapters detected.", flush=True)
+            if count < args.expected:
+                print("Validation failed even after the thorough scan. No .m4b file was created.", flush=True)
+                return 4
 
     if not found:
         print("No headings were found. No .m4b file was created.")
