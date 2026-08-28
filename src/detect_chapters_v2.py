@@ -216,7 +216,7 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
         print(f"AMD tuning: using {feeder_threads} CPU feeder threads.", flush=True)
         silences = detect_silence_ranges(source)
         chunk_seconds = 1800; total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False; candidates: list[dict] = []
-        scan_started = time.monotonic(); audio_checked = 0.0
+        scan_started = time.monotonic(); audio_checked = 0.0; reported_numbers: set[int] = set()
         for chunk_index in range(total_chunks):
             chunk_start = chunk_index * chunk_seconds
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(chunk_start), "-i", str(source), "-t", str(min(chunk_seconds + 5, duration - chunk_start)), "-ac", "1", "-ar", "16000", str(chunk)], check=True, creationflags=NO_WINDOW)
@@ -236,6 +236,13 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
                     if number is None:
                         offset = chunk_start + item.get("offsets", {}).get("from", 0) / 1000; add_heading(found, offset - .75, title)
                     else: candidates.append(score_candidate(items, item_index, title, chunk_start, silences))
+            preview = select_sequence(candidates, expected, duration)
+            for candidate in preview:
+                number = candidate["number"]
+                if number not in reported_numbers:
+                    reported_numbers.add(number)
+                    print(f"FOUND_CHAPTER: {candidate['title']} at {clock(candidate['time'])} (provisional context match)", flush=True)
+            print(f"LIVE_CHAPTER_COUNT: {len(preview)}/{expected or '?'}", flush=True)
             print(f"  Progress: {chunk_index + 1}/{total_chunks} audiobook sections checked", flush=True)
             audio_checked += min(chunk_seconds, duration - chunk_start)
             elapsed = max(0.01, time.monotonic() - scan_started); speed = audio_checked / elapsed

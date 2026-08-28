@@ -69,7 +69,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title('Audiobook Maker V3'); self.geometry('780x620'); self.minsize(700,540)
         self.option_add('*Font',('Segoe UI',10)); self.q=queue.Queue(); self.chapters=[]
-        self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0
+        self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0; self.live_chapters=set()
         style=ttk.Style(self); style.configure('Title.TLabel',font=('Segoe UI Semibold',18)); style.configure('Accent.TButton',font=('Segoe UI Semibold',10))
         header=ttk.Frame(self); header.pack(fill='x',padx=24,pady=(20,6))
         ttk.Label(header,text='Audiobook Maker',style='Title.TLabel').pack(side='left')
@@ -103,7 +103,10 @@ class App(tk.Tk):
         self.progress=ttk.Progressbar(self.create,mode='determinate',maximum=100); self.progress.pack(fill='x',pady=(5,3))
         ttk.Label(self.create,textvariable=self.time_status,foreground='#666').pack(anchor='w',pady=(0,8))
         ttk.Label(self.create,textvariable=self.performance_status,foreground='#555').pack(anchor='w',pady=(0,6))
+        self.chapter_status=tk.StringVar(value='Chapters found: 0')
+        ttk.Label(self.create,textvariable=self.chapter_status,font=('Segoe UI Semibold',11),foreground='#008a2e').pack(anchor='w',pady=(0,6))
         self.log=tk.Text(self.create,height=10,state='disabled',wrap='word'); self.log.pack(fill='both',expand=True)
+        self.log.tag_configure('chapter_found',foreground='#00a83b',font=('Segoe UI Semibold',10))
 
     def make_fix(self):
         self.audio=tk.StringVar(); self.chapterfile=tk.StringVar()
@@ -120,6 +123,8 @@ class App(tk.Tk):
             while True:
                 kind,val=self.q.get_nowait()
                 if kind=='log': self.log.configure(state='normal'); self.log.insert('end',val+'\n'); self.log.see('end'); self.log.configure(state='disabled')
+                elif kind=='chapter_log': self.log.configure(state='normal'); self.log.insert('end','✓ '+val+'\n','chapter_found'); self.log.see('end'); self.log.configure(state='disabled')
+                elif kind=='chapter_count': self.chapter_status.set(val)
                 elif kind=='expected': self.expected.set(val)
                 elif kind=='done': messagebox.showinfo('Finished',val)
                 elif kind=='error': messagebox.showerror('Problem',val)
@@ -255,7 +260,9 @@ class App(tk.Tk):
         warning=f'This audiobook is {hours:.1f} hours long.\n\nLarge books can take a long time to process. Keep your computer plugged in and prevent it from sleeping.\n\nStart now?'
         if not messagebox.askokcancel('Before you start',warning): return
         self.running=True; self.cancelled=False; self.started_at=time.time(); self.last_percent=0
-        self.performance_status.set('')
+        self.performance_status.set(''); self.live_chapters=set()
+        expected_now=re.match(r'(\d+)',self.expected.get()); expected_total=expected_now.group(1) if expected_now else ''
+        self.chapter_status.set('Chapters found: 0'+((' of '+expected_total) if expected_total else ''))
         self.start_button.configure(state='disabled'); self.cancel_button.configure(state='normal'); self.set_progress(status='Starting…',indeterminate=True)
         self.write('Starting faster chapter scan…')
         def work():
@@ -276,7 +283,20 @@ class App(tk.Tk):
                 proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
                 self.job_proc=proc
                 for line in proc.stdout:
-                    line=line.rstrip(); self.write(line)
+                    line=line.rstrip()
+                    if line.startswith('FOUND_CHAPTER:'):
+                        message=line.split(':',1)[1].strip(); match=re.search(r'Chapter\s+(\d+)',message,re.I)
+                        if match:self.live_chapters.add(int(match.group(1)))
+                        self.q.put(('chapter_log',message)); continue
+                    if line.startswith('LIVE_CHAPTER_COUNT:'):
+                        count=line.split(':',1)[1].strip(); parts=count.split('/',1)
+                        self.q.put(('chapter_count',f'Chapters found: {parts[0]}'+((' of '+parts[1]) if len(parts)>1 and parts[1]!='?' else ''))); continue
+                    found_match=re.search(r'Found\s+Chapter\s+(\d+)',line,re.I)
+                    if found_match:
+                        number=int(found_match.group(1))
+                        if number not in self.live_chapters:self.q.put(('chapter_log',line.strip()))
+                        self.live_chapters.add(number); self.q.put(('chapter_count',f'Chapters found: {len(self.live_chapters)}'+((' of '+expected_total) if expected_total else ''))); continue
+                    self.write(line)
                     if line.startswith('Step 1/3:'): self.q.put(('progress',{'status':'Finding likely chapter breaks…','indeterminate':True}))
                     elif line.startswith('Step 2/3:'): self.q.put(('progress',{'percent':10,'status':'Listening near likely chapter breaks…'}))
                     elif line.startswith('ACTIVE PROCESSOR:'): self.q.put(('progress',{'percent':10,'status':'Using '+line.split(':',1)[1].strip()}))
