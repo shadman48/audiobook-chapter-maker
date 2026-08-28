@@ -284,6 +284,7 @@ class App(tk.Tk):
                     elif line.strip().startswith('Transcription speed:'): self.q.put(('performance',line.strip()))
                     elif line.startswith('Thorough fallback:'): self.q.put(('progress',{'status':'Running a thorough full-book scan…','indeterminate':True}))
                     elif line.startswith('Thorough scan:'): self.q.put(('progress',{'status':'Scanning the full book with AMD Vulkan…','indeterminate':True}))
+                    elif line.startswith('Context analysis:'): self.q.put(('progress',{'status':'Checking pauses and surrounding context…','indeterminate':True}))
                     elif line.strip().startswith('Progress:'):
                         m=re.search(r'(\d+)/(\d+)',line)
                         if m:
