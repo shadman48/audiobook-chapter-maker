@@ -37,7 +37,9 @@ def reference_books():
     for path in (Path(__file__).with_name('book_references.json'),app_data_dir()/'community-references.json',app_data_dir()/'reference-cache.json'):
         try: books.extend(json.loads(path.read_text(encoding='utf-8')).get('books',[]))
         except (OSError,ValueError): pass
-    return books
+    unique={}
+    for book in books: unique[(normalized(book.get('title','')),tuple(normalized(a) for a in book.get('authors',[])))]=book
+    return list(unique.values())
 def refresh_reference_catalog():
     destination=app_data_dir()/'community-references.json'; destination.parent.mkdir(parents=True,exist_ok=True)
     request=urllib.request.Request(COMMUNITY_CATALOG_URL,headers={'User-Agent':'AudiobookChapterMaker/0.3'})
