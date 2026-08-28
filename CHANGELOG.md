@@ -14,4 +14,5 @@
 - Added Automatic, Require NVIDIA GPU, and CPU-only modes with a real CUDA execution test.
 - Added a visible Report a Bug button and guided GitHub issue form.
 - Added an AMD Vulkan mode using a user-selected whisper.cpp executable and GGML model, including a real backend test.
+- Replaced manual AMD configuration with automatic GPU detection, verified one-time engine/model downloads, installation, and chunked Vulkan transcription.
 - Preserved source audio and avoided software-version labels in generated filenames.

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, queue, re, subprocess, sys, threading, time, urllib.parse, urllib.request, webbrowser
+import hashlib, json, os, queue, re, shutil, subprocess, sys, threading, time, urllib.parse, urllib.request, webbrowser, zipfile
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -8,6 +8,11 @@ TIME_RE=re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
 ROW_RE=re.compile(r"^\s*\d+\s+(\d\d:\d\d:\d\d)\s+(.+?)\s*$")
 KNOWN_COUNTS={'the elvenbane':25,'elvenbane':25,'elvenblood':10,'elvenborn':35}
 NO_WINDOW=0x08000000 if sys.platform=='win32' else 0
+AMD_ENGINE_URL='https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/v1.8.4/whisper-v1.8.4-windows-vulkan-x64.zip'
+AMD_ENGINE_SHA256='e0d20a0f92e31b98adc0faf71172efc810b701e6391a9d858ca045bff26f77cd'
+AMD_MODEL_URL='https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'
+AMD_MODEL_SHA256='a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002'
+AMD_MODEL_SIZE=147964211
 
 def seconds(text):
     m=TIME_RE.match(text.strip())
@@ -19,6 +24,45 @@ def esc(s): return s.replace('\\','\\\\').replace('=','\\=').replace(';','\\;').
 def duration(path):
     r=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
     return float(r.stdout.strip())
+def sha256(path):
+    digest=hashlib.sha256()
+    with open(path,'rb') as stream:
+        for block in iter(lambda:stream.read(1024*1024),b''): digest.update(block)
+    return digest.hexdigest()
+def app_data_dir():
+    return Path(os.environ.get('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'AudiobookChapterMaker'
+def download_verified(url,destination,expected_hash,label,progress):
+    destination.parent.mkdir(parents=True,exist_ok=True); partial=destination.with_suffix(destination.suffix+'.download')
+    request=urllib.request.Request(url,headers={'User-Agent':'Audiobook-Chapter-Maker'})
+    with urllib.request.urlopen(request,timeout=60) as response,open(partial,'wb') as output:
+        total=int(response.headers.get('Content-Length') or 0); received=0
+        while True:
+            block=response.read(1024*1024)
+            if not block:break
+            output.write(block);received+=len(block);progress(label,received,total)
+    if sha256(partial).lower()!=expected_hash.lower(): partial.unlink(missing_ok=True);raise RuntimeError(label+' failed its security check. Please try again.')
+    partial.replace(destination)
+def ensure_amd_engine(progress):
+    root=app_data_dir();engine_dir=root/'engines'/'amd-vulkan-v1.8.4';cli=engine_dir/'whisper-cli.exe';model=root/'models'/'ggml-base.en.bin';archive=root/'downloads'/'amd-vulkan-v1.8.4.zip'
+    if not cli.is_file():
+        if not archive.is_file() or sha256(archive).lower()!=AMD_ENGINE_SHA256: download_verified(AMD_ENGINE_URL,archive,AMD_ENGINE_SHA256,'Downloading AMD speech engine',progress)
+        progress('Installing AMD speech engine',1,1)
+        if engine_dir.exists(): shutil.rmtree(engine_dir)
+        engine_dir.mkdir(parents=True)
+        with zipfile.ZipFile(archive) as bundle:
+            for member in bundle.infolist():
+                target=(engine_dir/member.filename).resolve()
+                if engine_dir.resolve() not in target.parents and target!=engine_dir.resolve(): raise RuntimeError('Unsafe file found in the AMD engine package.')
+            bundle.extractall(engine_dir)
+    if not model.is_file() or sha256(model).lower()!=AMD_MODEL_SHA256: download_verified(AMD_MODEL_URL,model,AMD_MODEL_SHA256,'Downloading English speech model',progress)
+    return cli,model
+def detect_graphics_names():
+    try:
+        script='$n=@();try{$n+=Get-CimInstance Win32_VideoController -ErrorAction Stop|ForEach-Object Name}catch{};if(-not $n){$n+=Get-ItemProperty "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Video\\*\\0000" -ErrorAction SilentlyContinue|ForEach-Object DriverDesc};$n -join "|"'
+        command=['powershell.exe','-NoLogo','-NoProfile','-Command',script]
+        result=subprocess.run(command,capture_output=True,text=True,timeout=10,creationflags=NO_WINDOW)
+        return result.stdout.strip()
+    except Exception:return ''
 
 class App(tk.Tk):
     def __init__(self):
@@ -47,10 +91,9 @@ class App(tk.Tk):
         ttk.Button(box,text='Look up online',command=self.lookup).grid(row=0,column=2,padx=8); ttk.Button(box,text='Enter manually',command=self.manual_expected).grid(row=0,column=3)
         ttk.Label(box,text='The expected count guides automatic retries. Leave Unknown if unsure.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
         ttk.Label(box,text='Processor:').grid(row=2,column=0,sticky='w',pady=(10,0))
-        self.device_mode=tk.StringVar(value='Automatic (NVIDIA or CPU)'); self.amd_cli=tk.StringVar(); self.amd_model=tk.StringVar()
-        ttk.Combobox(box,textvariable=self.device_mode,state='readonly',width=29,values=('Automatic (NVIDIA or CPU)','Require NVIDIA GPU','AMD GPU (Vulkan)','CPU only')).grid(row=2,column=1,columnspan=2,sticky='w',padx=8,pady=(10,0))
+        self.device_mode=tk.StringVar(value='Automatic (recommended)')
+        ttk.Combobox(box,textvariable=self.device_mode,state='readonly',width=29,values=('Automatic (recommended)','Require NVIDIA GPU','Require AMD GPU','CPU only')).grid(row=2,column=1,columnspan=2,sticky='w',padx=8,pady=(10,0))
         ttk.Button(box,text='Test selected GPU',command=self.test_gpu).grid(row=2,column=3,sticky='w',pady=(10,0))
-        ttk.Button(box,text='Configure AMD…',command=self.configure_amd).grid(row=3,column=1,sticky='w',padx=8,pady=(8,0))
         actions=ttk.Frame(self.create); actions.pack(fill='x',pady=(18,10))
         self.start_button=ttk.Button(actions,text='Start - Create Audio Book With Chapters',style='Accent.TButton',command=self.start_create); self.start_button.pack(side='left')
         self.cancel_button=ttk.Button(actions,text='Cancel',command=self.cancel_job,state='disabled'); self.cancel_button.pack(side='left',padx=8)
@@ -136,15 +179,10 @@ class App(tk.Tk):
     def report_bug(self):
         webbrowser.open('https://github.com/shadman48/audiobook-chapter-maker/issues/new?template=bug_report.yml')
 
-    def configure_amd(self):
-        cli=filedialog.askopenfilename(title='Choose the Vulkan whisper-cli.exe',filetypes=[('whisper-cli','whisper-cli.exe'),('Executable','*.exe')])
-        if not cli:return
-        model=filedialog.askopenfilename(title='Choose a GGML English Whisper model',filetypes=[('GGML model','ggml-*.bin'),('Model file','*.bin')])
-        if model:self.amd_cli.set(cli);self.amd_model.set(model);messagebox.showinfo('AMD configured','AMD Vulkan files selected for this app session. Use Test selected GPU to verify them.')
 
     def test_gpu(self):
         if self.running: return messagebox.showinfo('NVIDIA GPU test','Wait for the current audiobook job to finish or cancel it first.')
-        if self.device_mode.get()=='AMD GPU (Vulkan)': return self.test_amd_gpu()
+        if self.device_mode.get()=='Require AMD GPU' or ('amd' in detect_graphics_names().lower() or 'radeon' in detect_graphics_names().lower()): return self.test_amd_gpu()
         self.job_status.set('Testing NVIDIA GPU…')
         def work():
             try:
@@ -162,17 +200,16 @@ class App(tk.Tk):
         threading.Thread(target=work,daemon=True).start()
 
     def test_amd_gpu(self):
-        if not Path(self.amd_cli.get()).is_file() or not Path(self.amd_model.get()).is_file():
-            self.configure_amd()
-            if not Path(self.amd_cli.get()).is_file() or not Path(self.amd_model.get()).is_file(): return
         self.job_status.set('Testing AMD Vulkan GPU…')
         def work():
             try:
                 import tempfile
+                def progress(label,done,total): self.q.put(('progress',{'percent':100*done/max(1,total),'status':label+'…'}))
+                cli,model=ensure_amd_engine(progress)
                 with tempfile.TemporaryDirectory() as d:
                     wav=Path(d)/'silence.wav'
                     subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','anullsrc=r=16000:cl=mono','-t','1','-y',str(wav)],check=True,creationflags=NO_WINDOW)
-                    result=subprocess.run([self.amd_cli.get(),'-m',self.amd_model.get(),'-f',str(wav),'-l','en'],capture_output=True,text=True,creationflags=NO_WINDOW,timeout=120)
+                    result=subprocess.run([str(cli),'-m',str(model),'-f',str(wav),'-l','en'],capture_output=True,text=True,creationflags=NO_WINDOW,timeout=120)
                 details=(result.stdout+'\n'+result.stderr)
                 if result.returncode: raise RuntimeError(details[-1200:])
                 if not re.search(r'vulkan|ggml_vulkan',details,re.I): raise RuntimeError('The executable ran, but did not report a Vulkan backend. Choose a Vulkan-enabled whisper.cpp build.')
@@ -225,11 +262,13 @@ class App(tk.Tk):
                 command=[sys.executable,'-u',str(script),str(p)]
                 expected_match=re.match(r'(\d+)',self.expected.get())
                 if expected_match: command += ['--expected',expected_match.group(1)]
-                device={'Automatic (NVIDIA or CPU)':'auto','Require NVIDIA GPU':'cuda','AMD GPU (Vulkan)':'amd','CPU only':'cpu'}[self.device_mode.get()]
+                selected=self.device_mode.get();graphics=detect_graphics_names().lower()
+                device={'Automatic (recommended)':('amd' if ('amd' in graphics or 'radeon' in graphics) else 'auto'),'Require NVIDIA GPU':'cuda','Require AMD GPU':'amd','CPU only':'cpu'}[selected]
                 command += ['--device',device]
                 if device=='amd':
-                    if not Path(self.amd_cli.get()).is_file() or not Path(self.amd_model.get()).is_file(): raise RuntimeError('Configure and test the AMD Vulkan files first.')
-                    command += ['--amd-cli',self.amd_cli.get(),'--amd-model',self.amd_model.get()]
+                    def setup_progress(label,done,total): self.q.put(('progress',{'percent':100*done/max(1,total),'status':label+'…'}))
+                    cli,model=ensure_amd_engine(setup_progress)
+                    command += ['--amd-cli',str(cli),'--amd-model',str(model)]
                 proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
                 self.job_proc=proc
                 for line in proc.stdout:

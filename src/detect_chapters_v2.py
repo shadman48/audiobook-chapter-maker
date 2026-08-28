@@ -107,27 +107,30 @@ def full_scan(model, source: Path, found: list[tuple[float, str]]) -> None:
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
-def amd_full_scan(cli: Path, model: Path, source: Path, found: list[tuple[float, str]]) -> None:
+def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]]) -> None:
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
-        output_base = Path(temp) / "transcription"
-        command = [str(cli), "-m", str(model), "-f", str(source), "-l", "en", "-ojf", "-of", str(output_base), "-pp"]
-        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", creationflags=NO_WINDOW)
-        backend_seen = False
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            print(line.rstrip(), flush=True)
-            if re.search(r"vulkan|ggml_vulkan", line, re.I): backend_seen = True
-        if proc.wait(): raise RuntimeError("AMD whisper.cpp transcription failed.")
-        if not backend_seen: raise RuntimeError("The selected whisper.cpp executable did not report an active Vulkan backend.")
-        json_path = output_base.with_suffix(".json")
-        data = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
-        for item in data.get("transcription", []):
-            match = HEADING.search(item.get("text", ""))
-            if match:
-                offset = item.get("offsets", {}).get("from", 0) / 1000
-                add_heading(found, offset - 0.75, match.group("title").title())
+        temp_dir = Path(temp); chunk = temp_dir / "chunk.wav"; output_base = temp_dir / "transcription"
+        chunk_seconds = 1800; total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False
+        for chunk_index in range(total_chunks):
+            chunk_start = chunk_index * chunk_seconds
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(chunk_start), "-i", str(source), "-t", str(min(chunk_seconds + 5, duration - chunk_start)), "-ac", "1", "-ar", "16000", str(chunk)], check=True, creationflags=NO_WINDOW)
+            command = [str(cli), "-m", str(model), "-f", str(chunk), "-l", "en", "-ojf", "-of", str(output_base), "-pp"]
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", creationflags=NO_WINDOW)
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                print(line.rstrip(), flush=True)
+                if re.search(r"vulkan|ggml_vulkan", line, re.I): backend_seen = True
+            if proc.wait(): raise RuntimeError("AMD whisper.cpp transcription failed.")
+            data = json.loads(output_base.with_suffix(".json").read_text(encoding="utf-8", errors="replace"))
+            for item in data.get("transcription", []):
+                match = HEADING.search(item.get("text", ""))
+                if match:
+                    offset = chunk_start + item.get("offsets", {}).get("from", 0) / 1000
+                    add_heading(found, offset - 0.75, match.group("title").title())
+            print(f"  Progress: {chunk_index + 1}/{total_chunks} audiobook sections checked", flush=True)
+        if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
 
 
 def main() -> int:
@@ -150,7 +153,7 @@ def main() -> int:
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
-        amd_full_scan(args.amd_cli, args.amd_model, source, found)
+        amd_full_scan(args.amd_cli, args.amd_model, source, duration, found)
         if args.expected and chapter_count(found) < args.expected:
             print(f"Final validation: {chapter_count(found)} of {args.expected} numbered chapters detected.", flush=True)
             print("Validation failed. No .m4b file was created.", flush=True)

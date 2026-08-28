@@ -56,9 +56,9 @@ The Processor menu offers **Automatic**, **Require NVIDIA GPU**, and **CPU only*
 
 Current faster-whisper GPU releases require an NVIDIA CUDA-capable GPU together with CUDA 12 cuBLAS and cuDNN 9 libraries available on the Windows PATH. An ordinary GPU driver alone may not be sufficient. See the [faster-whisper GPU requirements](https://github.com/SYSTRAN/faster-whisper#gpu).
 
-AMD acceleration uses a Vulkan-enabled `whisper.cpp` executable and a GGML English model selected through **Configure AMD**. The app performs a real one-second Vulkan test before processing. AMD mode currently performs a thorough full-book scan rather than pause-guided faster-whisper scanning.
+AMD acceleration is automatic. On an AMD computer, the app downloads a pinned Vulkan-enabled `whisper.cpp` engine and GGML English model on first use, verifies their SHA-256 checksums, installs them under Local AppData, and performs a real Vulkan test. Subsequent runs reuse those files. AMD mode scans the full audiobook in manageable sections.
 
-Official whisper.cpp supports Vulkan as a cross-vendor GPU backend. Prebuilt Windows Vulkan availability is still evolving, so the app does not automatically download an unverified binary. See the [whisper.cpp Vulkan documentation](https://github.com/ggml-org/whisper.cpp#vulkan-gpu-support) and the [AMD-focused build project](https://github.com/lemonade-sdk/whisper.cpp-amd).
+The pinned Windows engine comes from [Lemonade SDK's AMD-focused whisper.cpp release](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/tag/v1.8.4), and the model comes from the [official whisper.cpp model repository](https://huggingface.co/ggerganov/whisper.cpp). See the [whisper.cpp Vulkan documentation](https://github.com/ggml-org/whisper.cpp#vulkan-gpu-support).
 
 ## Reporting bugs
 
