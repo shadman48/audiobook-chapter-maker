@@ -14,6 +14,8 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Repair an existing `.m4b` without re-encoding its audio
 - Preserves the original MP3 and earlier audiobook files
 - Silent Windows launcher with progress shown inside the app
+- Real progress and activity indicators, elapsed time, and estimated time remaining
+- Long-book warning, cancellation, and protection against accidental closing
 
 ## Windows quick start
 
@@ -37,4 +39,4 @@ Audio processing runs locally. The application does not upload audiobook audio. 
 
 ## Current status
 
-This is an early public version under active development. Verify generated chapter lists before relying on them. Planned improvements include a full progress bar, elapsed-time and remaining-time estimates, cancellation, long-book warnings, and safer close protection while processing.
+This is an early public version under active development. Verify generated chapter lists before relying on them.

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json, queue, re, subprocess, sys, threading, urllib.parse, urllib.request
+import json, queue, re, subprocess, sys, threading, time, urllib.parse, urllib.request
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -24,12 +24,13 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__(); self.title('Audiobook Maker V3'); self.geometry('780x620'); self.minsize(700,540)
         self.option_add('*Font',('Segoe UI',10)); self.q=queue.Queue(); self.chapters=[]
+        self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0
         style=ttk.Style(self); style.configure('Title.TLabel',font=('Segoe UI Semibold',18)); style.configure('Accent.TButton',font=('Segoe UI Semibold',10))
         ttk.Label(self,text='Audiobook Maker',style='Title.TLabel').pack(anchor='w',padx=24,pady=(20,6))
         ttk.Label(self,text='Create and repair your chaptered .m4b audiobook file. Your source files are never changed.').pack(anchor='w',padx=24)
         tabs=ttk.Notebook(self); tabs.pack(fill='both',expand=True,padx=20,pady=16)
         self.create=ttk.Frame(tabs,padding=18); self.fix=ttk.Frame(tabs,padding=18); tabs.add(self.create,text='  Create Audiobook  '); tabs.add(self.fix,text='  Fix Chapters  ')
-        self.make_create(); self.make_fix(); self.after(150,self.poll)
+        self.make_create(); self.make_fix(); self.protocol('WM_DELETE_WINDOW',self.on_close); self.after(150,self.poll); self.after(1000,self.tick)
         if len(sys.argv)>1: self.source.set(str(Path(sys.argv[1]).resolve()))
 
     def file_row(self,parent,var,label,types,command=None):
@@ -43,8 +44,14 @@ class App(tk.Tk):
         ttk.Label(box,text='Expected chapters:').grid(row=0,column=0,sticky='w'); ttk.Label(box,textvariable=self.expected).grid(row=0,column=1,sticky='w',padx=8)
         ttk.Button(box,text='Look up online',command=self.lookup).grid(row=0,column=2,padx=8); ttk.Button(box,text='Enter manually',command=self.manual_expected).grid(row=0,column=3)
         ttk.Label(box,text='Online counts are advisory and never prevent creation.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
-        ttk.Button(self.create,text='Start - Create Audio Book With Chapters',style='Accent.TButton',command=self.start_create).pack(anchor='w',pady=18)
-        self.log=tk.Text(self.create,height=13,state='disabled',wrap='word'); self.log.pack(fill='both',expand=True)
+        actions=ttk.Frame(self.create); actions.pack(fill='x',pady=(18,10))
+        self.start_button=ttk.Button(actions,text='Start - Create Audio Book With Chapters',style='Accent.TButton',command=self.start_create); self.start_button.pack(side='left')
+        self.cancel_button=ttk.Button(actions,text='Cancel',command=self.cancel_job,state='disabled'); self.cancel_button.pack(side='left',padx=8)
+        self.job_status=tk.StringVar(value='Ready'); self.time_status=tk.StringVar(value='')
+        ttk.Label(self.create,textvariable=self.job_status).pack(anchor='w')
+        self.progress=ttk.Progressbar(self.create,mode='determinate',maximum=100); self.progress.pack(fill='x',pady=(5,3))
+        ttk.Label(self.create,textvariable=self.time_status,foreground='#666').pack(anchor='w',pady=(0,8))
+        self.log=tk.Text(self.create,height=10,state='disabled',wrap='word'); self.log.pack(fill='both',expand=True)
 
     def make_fix(self):
         self.audio=tk.StringVar(); self.chapterfile=tk.StringVar()
@@ -65,8 +72,54 @@ class App(tk.Tk):
                 elif kind=='done': messagebox.showinfo('Finished',val)
                 elif kind=='error': messagebox.showerror('Problem',val)
                 elif kind=='lookup_info': messagebox.showinfo('Chapter lookup',val)
+                elif kind=='progress': self.set_progress(**val)
+                elif kind=='stopped': self.finish_job(cancelled=True)
+                elif kind=='job_done': self.finish_job(cancelled=False); messagebox.showinfo('Finished',val)
+                elif kind=='failed': self.finish_job(error=True); messagebox.showerror('Problem',val)
         except queue.Empty: pass
         self.after(150,self.poll)
+
+    def set_progress(self,percent=None,status=None,indeterminate=False):
+        if status: self.job_status.set(status)
+        if indeterminate:
+            if str(self.progress['mode'])!='indeterminate': self.progress.configure(mode='indeterminate'); self.progress.start(12)
+        else:
+            self.progress.stop(); self.progress.configure(mode='determinate')
+            if percent is not None: self.last_percent=max(0,min(100,float(percent))); self.progress['value']=self.last_percent
+
+    def tick(self):
+        if self.running:
+            elapsed=max(0,time.time()-self.started_at); eta='Calculating remaining time…'
+            if 1 <= self.last_percent < 100:
+                remain=elapsed*(100-self.last_percent)/self.last_percent; eta='Estimated remaining: '+clock(remain)
+            self.time_status.set('Elapsed: '+clock(elapsed)+'    '+eta)
+        self.after(1000,self.tick)
+
+    def finish_job(self,cancelled=False,error=False):
+        self.running=False; self.job_proc=None; self.progress.stop(); self.progress.configure(mode='determinate'); self.start_button.configure(state='normal'); self.cancel_button.configure(state='disabled')
+        if cancelled: self.job_status.set('Cancelled'); self.time_status.set('The original audiobook was not changed.')
+        elif error: self.progress['value']=0; self.last_percent=0; self.job_status.set('Stopped because of a problem')
+        else: self.progress['value']=100; self.last_percent=100; self.job_status.set('Finished')
+
+    def cancel_job(self):
+        if not self.running or not messagebox.askyesno('Cancel processing','Stop the current audiobook job?\n\nThe original MP3 will remain unchanged.'): return
+        self.cancelled=True; self.job_status.set('Cancelling…'); proc=self.job_proc
+        if proc and proc.poll() is None:
+            try:
+                if sys.platform=='win32': subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True,creationflags=NO_WINDOW)
+                else: proc.terminate()
+            except Exception: pass
+
+    def on_close(self):
+        if self.running:
+            if not messagebox.askyesno('Processing is still running','Closing now will cancel the current job.\n\nClose Audiobook Maker?'): return
+            self.cancelled=True; proc=self.job_proc
+            if proc and proc.poll() is None:
+                try:
+                    if sys.platform=='win32': subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True,creationflags=NO_WINDOW)
+                    else: proc.terminate()
+                except Exception: pass
+        self.destroy()
 
     def manual_expected(self):
         n=simpledialog.askinteger('Expected chapters','How many numbered chapters should the book contain?',minvalue=1,maxvalue=999)
@@ -94,15 +147,39 @@ class App(tk.Tk):
     def start_create(self):
         p=Path(self.source.get())
         if not p.is_file(): return messagebox.showerror('Choose a file','Please choose an audiobook MP3.')
+        try: book_seconds=duration(p)
+        except Exception as e: return messagebox.showerror('Cannot read audiobook','The audiobook duration could not be read.\n\n'+str(e))
+        hours=book_seconds/3600
+        warning=f'This audiobook is {hours:.1f} hours long.\n\nLarge books can take a long time to process. Keep your computer plugged in and prevent it from sleeping.\n\nStart now?'
+        if not messagebox.askokcancel('Before you start',warning): return
+        self.running=True; self.cancelled=False; self.started_at=time.time(); self.last_percent=0
+        self.start_button.configure(state='disabled'); self.cancel_button.configure(state='normal'); self.set_progress(status='Starting…',indeterminate=True)
         self.write('Starting faster chapter scan…')
         def work():
             try:
                 script=Path(__file__).with_name('detect_chapters_v2.py')
                 if not script.is_file():
                     raise FileNotFoundError('The V3 engine file detect_chapters_v2.py is missing. Extract every file from the V3 ZIP into the same folder.')
-                proc=subprocess.Popen([sys.executable,str(script),str(p)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
-                for line in proc.stdout: self.write(line.rstrip())
-                if proc.wait(): raise RuntimeError('Creation did not finish successfully. See the log.')
+                proc=subprocess.Popen([sys.executable,'-u',str(script),str(p)],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
+                self.job_proc=proc
+                for line in proc.stdout:
+                    line=line.rstrip(); self.write(line)
+                    if line.startswith('Step 1/3:'): self.q.put(('progress',{'status':'Finding likely chapter breaks…','indeterminate':True}))
+                    elif line.startswith('Step 2/3:'): self.q.put(('progress',{'percent':10,'status':'Listening near likely chapter breaks…'}))
+                    elif line.strip().startswith('Progress:'):
+                        m=re.search(r'(\d+)/(\d+)',line)
+                        if m: self.q.put(('progress',{'percent':10+70*int(m.group(1))/max(1,int(m.group(2))),'status':f'Checking location {m.group(1)} of {m.group(2)}…'}))
+                    elif line.startswith('Step 3/3:'): self.q.put(('progress',{'percent':82,'status':'Creating your .m4b file…'}))
+                    elif line.startswith('out_time='):
+                        try: self.q.put(('progress',{'percent':82+18*seconds(line.split('=',1)[1])/book_seconds,'status':'Creating your .m4b file…'}))
+                        except ValueError: pass
+                code=proc.wait()
+                if self.cancelled:
+                    for partial in p.parent.glob(p.stem+'*.working.m4b'):
+                        try: partial.unlink()
+                        except OSError: pass
+                    self.q.put(('stopped','')); return
+                if code: raise RuntimeError('Creation did not finish successfully. See the log.')
                 chapter_path=p.with_name(p.stem+' - chapters.txt')
                 detected=[]
                 if chapter_path.exists():
@@ -112,8 +189,8 @@ class App(tk.Tk):
                     wanted=int(expected_match.group(1)); present=set(detected); missing=[n for n in range(1,wanted+1) if n not in present]
                     self.write(f'Validation: detected {len(present)} of {wanted} expected numbered chapters.')
                     self.write('Missing: '+(', '.join('Chapter '+str(n) for n in missing) if missing else 'none — MATCH'))
-                self.q.put(('done','Your .m4b file and chapter list were saved beside the MP3.'))
-            except Exception as e: self.q.put(('error',str(e)))
+                self.q.put(('job_done','Your .m4b file and chapter list were saved beside the MP3.'))
+            except Exception as e: self.q.put(('failed',str(e)))
         threading.Thread(target=work,daemon=True).start()
 
     def open_chapters(self):

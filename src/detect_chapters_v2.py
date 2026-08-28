@@ -126,9 +126,11 @@ def main() -> int:
         end = found[i + 1][0] if i + 1 < len(found) else duration
         lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(start*1000)}", f"END={int(end*1000)}", f"title={escape(title)}"]
     meta_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("Step 3/3: creating the V2 M4B...")
-    subprocess.run(["ffmpeg", "-hide_banner", "-y", "-i", str(source), "-i", str(meta_file), "-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(output)], check=True, creationflags=NO_WINDOW)
-    print(f"M4B: {output}\nChapters: {chapter_file}\nOriginal: unchanged")
+    print("Step 3/3: creating your .m4b file...")
+    working = output.with_suffix(".working.m4b")
+    subprocess.run(["ffmpeg", "-hide_banner", "-y", "-i", str(source), "-i", str(meta_file), "-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(working)], check=True, creationflags=NO_WINDOW)
+    working.replace(output)
+    print(f"Your .m4b file: {output}\nChapters: {chapter_file}\nOriginal: unchanged")
     return 0
 
 
