@@ -41,6 +41,21 @@ def escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
 
 
+def heading_title(text: str, expected: int = 0) -> str | None:
+    match = HEADING.search(text)
+    if match:
+        return match.group("title").title()
+    # Some accessible-library recordings announce only an isolated number,
+    # e.g. "1", rather than saying "Chapter One".
+    clean = text.strip().strip(".,:;!?-–—()[]{}")
+    if clean.isdigit():
+        number = int(clean)
+        upper = expected if expected else 200
+        if 1 <= number <= upper:
+            return f"Chapter {number}"
+    return None
+
+
 def find_candidates(source: Path, silence_db: int, silence_seconds: float) -> list[float]:
     print(f"Step 1/3: finding pauses of at least {silence_seconds:g} seconds...")
     proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(source), "-af", f"silencedetect=noise={silence_db}dB:d={silence_seconds}", "-f", "null", "-"], capture_output=True, text=True, creationflags=NO_WINDOW)
@@ -83,7 +98,7 @@ def add_heading(found: list[tuple[float, str]], stamp: float, title: str) -> boo
     return True
 
 
-def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float]) -> None:
+def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float], expected: int = 0) -> None:
     with tempfile.TemporaryDirectory(prefix="audiobook-scan-") as temp:
         clip = Path(temp) / "candidate.wav"
         todo = [p for p in candidates if not any(abs(p-old) < 7 for old in scanned)]
@@ -94,22 +109,22 @@ def inspect_candidates(model, source: Path, duration: float, candidates: list[fl
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(start), "-i", str(source), "-t", str(length), "-ac", "1", "-ar", "16000", str(clip)], check=True, creationflags=NO_WINDOW)
             segments, _ = model.transcribe(str(clip), language="en", beam_size=3, vad_filter=True, condition_on_previous_text=False)
             for seg in segments:
-                match = HEADING.search(seg.text)
-                if match: add_heading(found, start + seg.start - 0.5, match.group("title").title())
+                title = heading_title(seg.text, expected)
+                if title: add_heading(found, start + seg.start - 0.5, title)
             if index == 1 or index % 25 == 0 or index == total:
                 print(f"  Progress: {index}/{max(1,total)} locations checked", flush=True)
 
 
-def full_scan(model, source: Path, found: list[tuple[float, str]]) -> None:
+def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int = 0) -> None:
     print("Thorough fallback: scanning the complete audiobook because validation did not pass.", flush=True)
     segments, _ = model.transcribe(str(source), language="en", beam_size=5, vad_filter=True, condition_on_previous_text=False)
     for index, seg in enumerate(segments, 1):
-        match = HEADING.search(seg.text)
-        if match: add_heading(found, seg.start - 0.75, match.group("title").title())
+        title = heading_title(seg.text, expected)
+        if title: add_heading(found, seg.start - 0.75, title)
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
-def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]]) -> None:
+def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0) -> None:
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
@@ -130,10 +145,10 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             if proc.wait(): raise RuntimeError("AMD whisper.cpp transcription failed.")
             data = json.loads(output_base.with_suffix(".json").read_text(encoding="utf-8", errors="replace"))
             for item in data.get("transcription", []):
-                match = HEADING.search(item.get("text", ""))
-                if match:
+                title = heading_title(item.get("text", ""), expected)
+                if title:
                     offset = chunk_start + item.get("offsets", {}).get("from", 0) / 1000
-                    add_heading(found, offset - 0.75, match.group("title").title())
+                    add_heading(found, offset - 0.75, title)
             print(f"  Progress: {chunk_index + 1}/{total_chunks} audiobook sections checked", flush=True)
             audio_checked += min(chunk_seconds, duration - chunk_start)
             elapsed = max(0.01, time.monotonic() - scan_started); speed = audio_checked / elapsed
@@ -162,7 +177,7 @@ def main() -> int:
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
-        amd_full_scan(args.amd_cli, args.amd_model, source, duration, found)
+        amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected)
         if args.expected and chapter_count(found) < args.expected:
             print(f"Final validation: {chapter_count(found)} of {args.expected} numbered chapters detected.", flush=True)
             print("Validation failed. No .m4b file was created.", flush=True)
@@ -191,7 +206,7 @@ def main() -> int:
         for pass_number, threshold in enumerate(dict.fromkeys(thresholds), 1):
             candidates = find_candidates(source, args.silence_db, threshold)
             print(f"Pause scan pass {pass_number}: inspecting new locations with Whisper...", flush=True)
-            inspect_candidates(model, source, duration, candidates, found, scanned)
+            inspect_candidates(model, source, duration, candidates, found, scanned, args.expected)
             count = chapter_count(found)
             if args.expected:
                 print(f"Validation after pass {pass_number}: {count} of {args.expected} numbered chapters detected.", flush=True)
@@ -201,7 +216,7 @@ def main() -> int:
                 break
 
         if args.expected and chapter_count(found) < args.expected:
-            full_scan(model, source, found)
+            full_scan(model, source, found, args.expected)
             count = chapter_count(found)
             print(f"Final validation: {count} of {args.expected} numbered chapters detected.", flush=True)
             if count < args.expected:

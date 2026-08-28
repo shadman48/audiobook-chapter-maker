@@ -16,4 +16,5 @@
 - Added an AMD Vulkan mode using a user-selected whisper.cpp executable and GGML model, including a real backend test.
 - Replaced manual AMD configuration with automatic GPU detection, verified one-time engine/model downloads, installation, and chunked Vulkan transcription.
 - Tuned AMD Vulkan feeding based on available CPU cores and added live real-time transcription-speed reporting.
+- Added support for audiobooks that announce chapters as isolated numbers instead of saying the word "Chapter."
 - Preserved source audio and avoided software-version labels in generated filenames.
