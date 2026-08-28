@@ -19,4 +19,5 @@
 - Added support for audiobooks that announce chapters as isolated numbers instead of saying the word "Chapter."
 - Added local context scoring, silence evidence, ordered sequence selection, confidence levels, and a detailed chapter-validation report.
 - Added bold green live chapter discoveries and a continuously updated found-versus-expected chapter counter.
+- Replaced automatic repeat scans with one pass per run and an optional, user-controlled retry settings dialog.
 - Preserved source audio and avoided software-version labels in generated filenames.

@@ -9,8 +9,8 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Local speech recognition after the initial model download
 - Optional expected-chapter lookup and manual validation
 - Missing-chapter reporting
-- Automatic retry with increasingly sensitive pause detection when the expected chapter count is not met
-- Thorough full-book fallback scan and validation failure protection
+- One scan per run—there are no automatic repeat scans
+- If validation is incomplete, a simple popup offers optional higher-accuracy or shorter-pause retry settings
 - Add, edit, rename, or remove chapter markers
 - Scan one minute near an approximate timestamp to recover a missing chapter
 - Repair an existing `.m4b` without re-encoding its audio

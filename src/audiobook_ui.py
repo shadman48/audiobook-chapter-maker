@@ -90,7 +90,7 @@ class App(tk.Tk):
         box=ttk.LabelFrame(self.create,text='Validation',padding=12); box.pack(fill='x')
         ttk.Label(box,text='Expected chapters:').grid(row=0,column=0,sticky='w'); ttk.Label(box,textvariable=self.expected).grid(row=0,column=1,sticky='w',padx=8)
         ttk.Button(box,text='Look up online',command=self.lookup).grid(row=0,column=2,padx=8); ttk.Button(box,text='Enter manually',command=self.manual_expected).grid(row=0,column=3)
-        ttk.Label(box,text='The expected count guides automatic retries. Leave Unknown if unsure.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
+        ttk.Label(box,text='The expected count checks the result. The app never retries without asking you.',foreground='#666').grid(row=1,column=0,columnspan=4,sticky='w',pady=(8,0))
         ttk.Label(box,text='Processor:').grid(row=2,column=0,sticky='w',pady=(10,0))
         self.device_mode=tk.StringVar(value='Automatic (recommended)')
         ttk.Combobox(box,textvariable=self.device_mode,state='readonly',width=29,values=('Automatic (recommended)','Require NVIDIA GPU','Require AMD GPU','CPU only')).grid(row=2,column=1,columnspan=2,sticky='w',padx=8,pady=(10,0))
@@ -135,6 +135,7 @@ class App(tk.Tk):
                 elif kind=='stopped': self.finish_job(cancelled=True)
                 elif kind=='job_done': self.finish_job(cancelled=False); messagebox.showinfo('Finished',val)
                 elif kind=='failed': self.finish_job(error=True); messagebox.showerror('Problem',val)
+                elif kind=='retry_offer': self.finish_job(error=True); self.offer_retry(*val)
         except queue.Empty: pass
         self.after(150,self.poll)
 
@@ -247,7 +248,22 @@ class App(tk.Tk):
                 self.q.put(('lookup_info',detail+' You can enter the expected count manually; audiobook creation is unaffected.'))
         threading.Thread(target=work,daemon=True).start()
 
-    def start_create(self):
+    def offer_retry(self,found,wanted):
+        if not messagebox.askyesno('Chapter check incomplete',f'The first scan found {found} of {wanted} expected chapters.\n\nWould you like to choose settings and try one more scan?'):
+            self.job_status.set('Incomplete — use Fix Chapters or start again when ready'); return
+        dialog=tk.Toplevel(self); dialog.title('Choose retry settings'); dialog.transient(self); dialog.grab_set(); dialog.resizable(False,False)
+        ttk.Label(dialog,text='What would you like to adjust?',font=('Segoe UI Semibold',12)).pack(anchor='w',padx=20,pady=(18,8))
+        choice=tk.StringVar(value='accurate')
+        ttk.Radiobutton(dialog,text='Higher speech accuracy (recommended, slower)',variable=choice,value='accurate').pack(anchor='w',padx=20,pady=5)
+        ttk.Radiobutton(dialog,text='Inspect shorter pauses (slowest, checks more sections)',variable=choice,value='short-pauses').pack(anchor='w',padx=20,pady=5)
+        ttk.Label(dialog,text='Only one new scan will run. The app will ask again if it is still incomplete.',foreground='#666').pack(anchor='w',padx=20,pady=(8,12))
+        buttons=ttk.Frame(dialog); buttons.pack(fill='x',padx=20,pady=(0,18))
+        ttk.Button(buttons,text='Cancel',command=dialog.destroy).pack(side='right')
+        def retry():
+            tuning=choice.get(); dialog.destroy(); self.start_create(tuning=tuning,confirm=False)
+        ttk.Button(buttons,text='Try One More Scan',style='Accent.TButton',command=retry).pack(side='right',padx=8)
+
+    def start_create(self,tuning='standard',confirm=True):
         p=Path(self.source.get())
         if not p.is_file(): return messagebox.showerror('Choose a file','Please choose an audiobook MP3.')
         if not re.match(r'(\d+)',self.expected.get()):
@@ -258,7 +274,7 @@ class App(tk.Tk):
         except Exception as e: return messagebox.showerror('Cannot read audiobook','The audiobook duration could not be read.\n\n'+str(e))
         hours=book_seconds/3600
         warning=f'This audiobook is {hours:.1f} hours long.\n\nLarge books can take a long time to process. Keep your computer plugged in and prevent it from sleeping.\n\nStart now?'
-        if not messagebox.askokcancel('Before you start',warning): return
+        if confirm and not messagebox.askokcancel('Before you start',warning): return
         self.running=True; self.cancelled=False; self.started_at=time.time(); self.last_percent=0
         self.performance_status.set(''); self.live_chapters=set()
         expected_now=re.match(r'(\d+)',self.expected.get()); expected_total=expected_now.group(1) if expected_now else ''
@@ -271,8 +287,9 @@ class App(tk.Tk):
                 if not script.is_file():
                     raise FileNotFoundError('The V3 engine file detect_chapters_v2.py is missing. Extract every file from the V3 ZIP into the same folder.')
                 command=[sys.executable,'-u',str(script),str(p)]
-                expected_match=re.match(r'(\d+)',self.expected.get())
-                if expected_match: command += ['--expected',expected_match.group(1)]
+                if expected_total: command += ['--expected',expected_total]
+                command += ['--tuning',tuning]
+                if tuning=='accurate' and self.device_mode.get() not in ('Require AMD GPU',): command += ['--model','small.en']
                 selected=self.device_mode.get();graphics=detect_graphics_names().lower()
                 device={'Automatic (recommended)':('amd' if ('amd' in graphics or 'radeon' in graphics) else 'auto'),'Require NVIDIA GPU':'cuda','Require AMD GPU':'amd','CPU only':'cpu'}[selected]
                 command += ['--device',device]
@@ -282,8 +299,13 @@ class App(tk.Tk):
                     command += ['--amd-cli',str(cli),'--amd-model',str(model)]
                 proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
                 self.job_proc=proc
+                incomplete=None
                 for line in proc.stdout:
                     line=line.rstrip()
+                    if line.startswith('INCOMPLETE_CHAPTERS:'):
+                        match=re.search(r'(\d+)\s*/\s*(\d+)',line)
+                        if match: incomplete=(int(match.group(1)),int(match.group(2)))
+                        continue
                     if line.startswith('FOUND_CHAPTER:'):
                         message=line.split(':',1)[1].strip(); match=re.search(r'Chapter\s+(\d+)',message,re.I)
                         if match:self.live_chapters.add(int(match.group(1)))
@@ -320,6 +342,8 @@ class App(tk.Tk):
                         try: partial.unlink()
                         except OSError: pass
                     self.q.put(('stopped','')); return
+                if code==4 and incomplete:
+                    self.q.put(('retry_offer',incomplete)); return
                 if code: raise RuntimeError('Creation did not finish successfully. See the log.')
                 chapter_path=p.with_name(p.stem+' - chapters.txt')
                 detected=[]

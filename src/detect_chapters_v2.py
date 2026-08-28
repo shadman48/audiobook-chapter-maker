@@ -207,7 +207,7 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
-def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0) -> tuple[list[dict], list[dict]]:
+def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard") -> tuple[list[dict], list[dict]]:
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
@@ -215,12 +215,14 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
         feeder_threads = min(12, max(4, (os.cpu_count() or 8) // 2))
         print(f"AMD tuning: using {feeder_threads} CPU feeder threads.", flush=True)
         silences = detect_silence_ranges(source)
-        chunk_seconds = 1800; total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False; candidates: list[dict] = []
+        chunk_seconds = 900 if tuning == "short-pauses" else 1800
+        total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False; candidates: list[dict] = []
         scan_started = time.monotonic(); audio_checked = 0.0; reported_numbers: set[int] = set()
         for chunk_index in range(total_chunks):
             chunk_start = chunk_index * chunk_seconds
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(chunk_start), "-i", str(source), "-t", str(min(chunk_seconds + 5, duration - chunk_start)), "-ac", "1", "-ar", "16000", str(chunk)], check=True, creationflags=NO_WINDOW)
             command = [str(cli), "-m", str(model), "-f", str(chunk), "-l", "en", "-t", str(feeder_threads), "-ojf", "-of", str(output_base), "-pp"]
+            if tuning in ("accurate", "short-pauses"): command += ["-bs", "8"]
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", creationflags=NO_WINDOW)
             assert proc.stdout is not None
             for line in proc.stdout:
@@ -262,6 +264,7 @@ def main() -> int:
     ap.add_argument("--silence-seconds", type=float, default=1.5)
     ap.add_argument("--expected", type=int, default=0)
     ap.add_argument("--device", choices=("auto", "cuda", "amd", "cpu"), default="auto")
+    ap.add_argument("--tuning", choices=("standard", "accurate", "short-pauses"), default="standard")
     ap.add_argument("--amd-cli", type=Path)
     ap.add_argument("--amd-model", type=Path)
     args = ap.parse_args()
@@ -274,13 +277,14 @@ def main() -> int:
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
-        selected, candidates = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected)
+        selected, candidates = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning)
         report_file = source.with_name(source.stem + " - chapter validation.txt")
         write_validation_report(report_file, selected, candidates, args.expected)
         print(f"Validation report: {report_file}", flush=True)
         if args.expected and chapter_count(found) < args.expected:
             print(f"Final validation: {chapter_count(found)} of {args.expected} numbered chapters detected.", flush=True)
-            print("Validation failed. No .m4b file was created.", flush=True)
+            print("INCOMPLETE_CHAPTERS: %d/%d" % (chapter_count(found), args.expected), flush=True)
+            print("The single scan is incomplete. No .m4b file was created.", flush=True)
             return 4
     else:
         found = []
@@ -302,25 +306,16 @@ def main() -> int:
             model = WhisperModel(args.model, device=device, compute_type=compute)
         print(f"ACTIVE PROCESSOR: {'NVIDIA GPU (CUDA)' if device == 'cuda' else 'CPU'}", flush=True)
         scanned: list[float] = []
-        thresholds = [args.silence_seconds, 1.0, 0.7, 0.4]
-        for pass_number, threshold in enumerate(dict.fromkeys(thresholds), 1):
-            candidates = find_candidates(source, args.silence_db, threshold)
-            print(f"Pause scan pass {pass_number}: inspecting new locations with Whisper...", flush=True)
-            inspect_candidates(model, source, duration, candidates, found, scanned, args.expected)
-            count = chapter_count(found)
-            if args.expected:
-                print(f"Validation after pass {pass_number}: {count} of {args.expected} numbered chapters detected.", flush=True)
-                if count >= args.expected: break
-                print("Validation did not pass; retrying with a more sensitive pause setting.", flush=True)
-            elif count >= 3:
-                break
-
-        if args.expected and chapter_count(found) < args.expected:
-            full_scan(model, source, found, args.expected)
-            count = chapter_count(found)
+        threshold = .7 if args.tuning == "short-pauses" else args.silence_seconds
+        candidates = find_candidates(source, args.silence_db, threshold)
+        print("Single scan: inspecting likely locations with Whisper...", flush=True)
+        inspect_candidates(model, source, duration, candidates, found, scanned, args.expected)
+        count = chapter_count(found)
+        if args.expected:
             print(f"Final validation: {count} of {args.expected} numbered chapters detected.", flush=True)
             if count < args.expected:
-                print("Validation failed even after the thorough scan. No .m4b file was created.", flush=True)
+                print("INCOMPLETE_CHAPTERS: %d/%d" % (count, args.expected), flush=True)
+                print("The single scan is incomplete. No .m4b file was created.", flush=True)
                 return 4
 
     if not found:
