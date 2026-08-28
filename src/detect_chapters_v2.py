@@ -28,7 +28,7 @@ NUMBER = (r"(?:\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|t
 HEADING = re.compile(rf"\b(?P<title>(?:chapter|book|part)\s+(?:the\s+)?{NUMBER}|prologue|epilogue|introduction|afterword)\b", re.I)
 SILENCE_END = re.compile(r"silence_end:\s*([0-9.]+)")
 SILENCE_START = re.compile(r"silence_start:\s*([0-9.]+)")
-PAGE_ANNOUNCEMENT = re.compile(r"\b(?:continuing\s+(?:on|at)\s+)?page\s+(\d{1,4})\b", re.I)
+PAGE_ANNOUNCEMENT = re.compile(r"\b(?:continuing|continued|continue)\s+(?:(?:on|at|from)\s+)?(?:printed\s+)?page\s+(\d{1,4})\b", re.I)
 
 
 def clock(seconds: float) -> str:
@@ -140,9 +140,9 @@ def select_sequence(candidates: list[dict], expected: int, duration: float) -> l
 
 
 def write_validation_report(path: Path, selected: list[dict], candidates: list[dict], expected: int) -> None:
-    selected_ids = {id(c) for c in selected}; lines = ["AUDIOBOOK CHAPTER VALIDATION", "", f"Expected numbered chapters: {expected or 'Unknown'}", f"Selected numbered chapters: {len(selected)}", ""]
+    selected_keys = {(c.get("number"), round(c.get("time", 0), 2), c.get("title")) for c in selected}; lines = ["AUDIOBOOK CHAPTER VALIDATION", "", f"Expected numbered chapters: {expected or 'Unknown'}", f"Selected numbered chapters: {len(selected)}", ""]
     for candidate in sorted(candidates, key=lambda c: c["time"]):
-        chosen = id(candidate) in selected; confidence = "High" if candidate["score"] >= 10 else "Medium" if candidate["score"] >= 7 else "Low"
+        chosen = (candidate.get("number"), round(candidate.get("time", 0), 2), candidate.get("title")) in selected_keys; confidence = "High" if candidate["score"] >= 10 else "Medium" if candidate["score"] >= 7 else "Low"
         lines += [f"{'SELECTED' if chosen else 'REJECTED'} — {candidate['title']} — {clock(candidate['time'])} — {confidence} ({candidate['score']})",
                   "Evidence: " + "; ".join(candidate["reasons"]), f"Before: {candidate['before']}", f"Heading: {candidate['text']}", f"After: {candidate['after']}", ""]
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -180,6 +180,26 @@ def reference_title_match(text: str, chapters: list[dict]) -> dict | None:
                 number = int(chapter.get("number") or 0)
                 if number: return {"number":number,"title":f"Chapter {number} — {title}"}
     return None
+
+
+def scan_evidence_path(source: Path) -> Path:
+    return source.with_name(source.stem + " - scan evidence.json")
+
+
+def save_scan_evidence(source: Path, candidates: list[dict], page_anchors: list[tuple[int, float]]) -> None:
+    stat = source.stat(); path = scan_evidence_path(source); working = path.with_suffix(".working.json")
+    data = {"format_version":1,"source_size":stat.st_size,"source_mtime_ns":stat.st_mtime_ns,
+            "speech_candidates":candidates,"page_anchors":page_anchors}
+    working.write_text(json.dumps(data,indent=2),encoding="utf-8"); working.replace(path)
+
+
+def load_scan_evidence(source: Path) -> tuple[list[dict], list[tuple[int,float]]] | None:
+    path=scan_evidence_path(source)
+    try:
+        data=json.loads(path.read_text(encoding="utf-8")); stat=source.stat()
+        if data.get("format_version") != 1 or data.get("source_size") != stat.st_size or data.get("source_mtime_ns") != stat.st_mtime_ns: return None
+        return data.get("speech_candidates",[]),[(int(page),float(stamp)) for page,stamp in data.get("page_anchors",[])]
+    except (OSError,ValueError,TypeError): return None
 
 
 def find_candidates(source: Path, silence_db: int, silence_seconds: float) -> list[float]:
@@ -265,6 +285,14 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
 
 
 def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard", toc_pages: list[int] | None = None, reference_chapters: list[dict] | None = None) -> tuple[list[dict], list[dict], bool]:
+    saved=load_scan_evidence(source)
+    if saved:
+        candidates,page_anchors=saved; candidates.extend(page_based_candidates(page_anchors,toc_pages or [],allow_extrapolation=True))
+        selected=select_sequence(candidates,expected,duration)
+        print("Reusing saved scan evidence; the audiobook does not need to be transcribed again.",flush=True)
+        for candidate in selected: add_heading(found,candidate["time"]-.75,candidate["title"])
+        print(f"LIVE_CHAPTER_COUNT: {len(selected)}/{expected or '?'}",flush=True)
+        return selected,candidates,False
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
@@ -317,6 +345,7 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             if duration > 7200 and audio_checked >= 7200 and not health_checked:
                 health_checked = True
                 if len(preview) < minimum_progress:
+                    save_scan_evidence(source,candidates,page_anchors)
                     print(f"EARLY_TOO_FEW_CHAPTERS: {len(preview)}/{minimum_progress}/02:00:00", flush=True)
                     print(f"Only {len(preview)} chapter(s) were recognized after two hours; at least {minimum_progress} were expected by this point. The scan was stopped early.", flush=True)
                     return [], candidates, True
@@ -324,6 +353,7 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             remaining = max(0.0, duration - audio_checked) / max(0.01, speed)
             print(f"  Transcription speed: {speed:.1f}x real-time | Scan remaining: {clock(remaining)}", flush=True)
         if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
+        save_scan_evidence(source,candidates,page_anchors)
         page_candidates = page_based_candidates(page_anchors, toc_pages or [], allow_extrapolation=True)
         candidates.extend(page_candidates)
         selected = select_sequence(candidates, expected, duration)
