@@ -20,4 +20,5 @@
 - Added local context scoring, silence evidence, ordered sequence selection, confidence levels, and a detailed chapter-validation report.
 - Added bold green live chapter discoveries and a continuously updated found-versus-expected chapter counter.
 - Replaced automatic repeat scans with one pass per run and an optional, user-controlled retry settings dialog.
+- Added a two-hour zero-chapter safety stop and recognition for word-only headings such as "Seven." or "Seven. The story continues...".
 - Preserved source audio and avoided software-version labels in generated filenames.

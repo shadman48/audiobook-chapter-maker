@@ -54,6 +54,19 @@ def heading_title(text: str, expected: int = 0) -> str | None:
         upper = expected if expected else 200
         if 1 <= number <= upper:
             return f"Chapter {number}"
+    # Whisper commonly spells a standalone announcement as "Seven." rather
+    # than emitting the digit 7. It may also attach the first narrated sentence
+    # to it, such as "Seven. Elvenbane awoke...". Only treat the short phrase
+    # before strong punctuation as a possible number; contextual scoring later
+    # rejects ordinary uses such as "three little pigs".
+    phrases = [clean]
+    leading = re.match(r"^\s*([^.!?:;,\n]{1,20})\s*[.!?:;,]\s+", text)
+    if leading: phrases.append(leading.group(1).strip())
+    upper = expected if expected else 200
+    for phrase in phrases:
+        number = chapter_number("Chapter " + phrase)
+        if number is not None and 1 <= number <= upper:
+            return f"Chapter {number}"
     return None
 
 
@@ -181,7 +194,7 @@ def add_heading(found: list[tuple[float, str]], stamp: float, title: str) -> boo
     return True
 
 
-def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float], expected: int = 0) -> None:
+def inspect_candidates(model, source: Path, duration: float, candidates: list[float], found: list[tuple[float, str]], scanned: list[float], expected: int = 0) -> bool:
     with tempfile.TemporaryDirectory(prefix="audiobook-scan-") as temp:
         clip = Path(temp) / "candidate.wav"
         todo = [p for p in candidates if not any(abs(p-old) < 7 for old in scanned)]
@@ -194,8 +207,13 @@ def inspect_candidates(model, source: Path, duration: float, candidates: list[fl
             for seg in segments:
                 title = heading_title(seg.text, expected)
                 if title: add_heading(found, start + seg.start - 0.5, title)
+            if duration > 7200 and point >= 7200 and chapter_count(found) == 0:
+                print("EARLY_NO_CHAPTERS: 02:00:00", flush=True)
+                print("No numbered chapters were recognized in the first two hours, so this scan was stopped early.", flush=True)
+                return True
             if index == 1 or index % 25 == 0 or index == total:
                 print(f"  Progress: {index}/{max(1,total)} locations checked", flush=True)
+    return False
 
 
 def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int = 0) -> None:
@@ -207,7 +225,7 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
         if index % 250 == 0: print(f"  Full scan progress: {clock(seg.end)} of audiobook checked", flush=True)
 
 
-def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard") -> tuple[list[dict], list[dict]]:
+def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard") -> tuple[list[dict], list[dict], bool]:
     print("ACTIVE PROCESSOR: AMD GPU (Vulkan)", flush=True)
     print("Thorough scan: processing the complete audiobook with AMD Vulkan...", flush=True)
     with tempfile.TemporaryDirectory(prefix="audiobook-amd-") as temp:
@@ -247,13 +265,17 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             print(f"LIVE_CHAPTER_COUNT: {len(preview)}/{expected or '?'}", flush=True)
             print(f"  Progress: {chunk_index + 1}/{total_chunks} audiobook sections checked", flush=True)
             audio_checked += min(chunk_seconds, duration - chunk_start)
+            if duration > 7200 and audio_checked >= 7200 and not preview:
+                print("EARLY_NO_CHAPTERS: 02:00:00", flush=True)
+                print("No numbered chapters were recognized in the first two hours, so this scan was stopped early.", flush=True)
+                return [], candidates, True
             elapsed = max(0.01, time.monotonic() - scan_started); speed = audio_checked / elapsed
             remaining = max(0.0, duration - audio_checked) / max(0.01, speed)
             print(f"  Transcription speed: {speed:.1f}x real-time | Scan remaining: {clock(remaining)}", flush=True)
         if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
         selected = select_sequence(candidates, expected, duration)
         for candidate in selected: add_heading(found, candidate["time"] - .75, candidate["title"])
-        return selected, candidates
+        return selected, candidates, False
 
 
 def main() -> int:
@@ -277,10 +299,12 @@ def main() -> int:
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
-        selected, candidates = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning)
+        selected, candidates, stopped_early = amd_full_scan(args.amd_cli, args.amd_model, source, duration, found, args.expected, args.tuning)
         report_file = source.with_name(source.stem + " - chapter validation.txt")
         write_validation_report(report_file, selected, candidates, args.expected)
         print(f"Validation report: {report_file}", flush=True)
+        if stopped_early:
+            return 5
         if args.expected and chapter_count(found) < args.expected:
             print(f"Final validation: {chapter_count(found)} of {args.expected} numbered chapters detected.", flush=True)
             print("INCOMPLETE_CHAPTERS: %d/%d" % (chapter_count(found), args.expected), flush=True)
@@ -309,7 +333,8 @@ def main() -> int:
         threshold = .7 if args.tuning == "short-pauses" else args.silence_seconds
         candidates = find_candidates(source, args.silence_db, threshold)
         print("Single scan: inspecting likely locations with Whisper...", flush=True)
-        inspect_candidates(model, source, duration, candidates, found, scanned, args.expected)
+        if inspect_candidates(model, source, duration, candidates, found, scanned, args.expected):
+            return 5
         count = chapter_count(found)
         if args.expected:
             print(f"Final validation: {count} of {args.expected} numbered chapters detected.", flush=True)

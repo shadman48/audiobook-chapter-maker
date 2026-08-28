@@ -248,8 +248,9 @@ class App(tk.Tk):
                 self.q.put(('lookup_info',detail+' You can enter the expected count manually; audiobook creation is unaffected.'))
         threading.Thread(target=work,daemon=True).start()
 
-    def offer_retry(self,found,wanted):
-        if not messagebox.askyesno('Chapter check incomplete',f'The first scan found {found} of {wanted} expected chapters.\n\nWould you like to choose settings and try one more scan?'):
+    def offer_retry(self,found,wanted,early=False):
+        detail=('No chapters were recognized in the first two hours, so the scan stopped early. This usually means the spoken headings need more accurate recognition.' if early else f'The scan found {found} of {wanted} expected chapters.')
+        if not messagebox.askyesno('Chapter check incomplete',detail+'\n\nWould you like to choose settings and try one more scan?'):
             self.job_status.set('Incomplete — use Fix Chapters or start again when ready'); return
         dialog=tk.Toplevel(self); dialog.title('Choose retry settings'); dialog.transient(self); dialog.grab_set(); dialog.resizable(False,False)
         ttk.Label(dialog,text='What would you like to adjust?',font=('Segoe UI Semibold',12)).pack(anchor='w',padx=20,pady=(18,8))
@@ -299,9 +300,13 @@ class App(tk.Tk):
                     command += ['--amd-cli',str(cli),'--amd-model',str(model)]
                 proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1,creationflags=NO_WINDOW)
                 self.job_proc=proc
-                incomplete=None
+                incomplete=None; stopped_early=False
                 for line in proc.stdout:
                     line=line.rstrip()
+                    if line.startswith('EARLY_NO_CHAPTERS:'):
+                        stopped_early=True
+                        self.q.put(('chapter_count','Chapters found: 0 — stopped after first 2 hours'))
+                        continue
                     if line.startswith('INCOMPLETE_CHAPTERS:'):
                         match=re.search(r'(\d+)\s*/\s*(\d+)',line)
                         if match: incomplete=(int(match.group(1)),int(match.group(2)))
@@ -342,8 +347,10 @@ class App(tk.Tk):
                         try: partial.unlink()
                         except OSError: pass
                     self.q.put(('stopped','')); return
+                if code==5 and stopped_early:
+                    self.q.put(('retry_offer',(0,int(expected_total or 0),True))); return
                 if code==4 and incomplete:
-                    self.q.put(('retry_offer',incomplete)); return
+                    self.q.put(('retry_offer',(incomplete[0],incomplete[1],False))); return
                 if code: raise RuntimeError('Creation did not finish successfully. See the log.')
                 chapter_path=p.with_name(p.stem+' - chapters.txt')
                 detected=[]
