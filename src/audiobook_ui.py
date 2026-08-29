@@ -7,7 +7,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 TIME_RE=re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
 ROW_RE=re.compile(r"^\s*\d+\s+(\d\d:\d\d:\d\d)\s+(.+?)\s*$")
 NO_WINDOW=0x08000000 if sys.platform=='win32' else 0
-APP_VERSION='3.48'
+APP_VERSION='3.49'
 AMD_ENGINE_URL='https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/v1.8.4/whisper-v1.8.4-windows-vulkan-x64.zip'
 AMD_ENGINE_SHA256='e0d20a0f92e31b98adc0faf71172efc810b701e6391a9d858ca045bff26f77cd'
 AMD_MODEL_URL='https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'

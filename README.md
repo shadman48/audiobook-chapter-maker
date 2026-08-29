@@ -2,7 +2,7 @@
 
 A simple Windows app that detects spoken chapter headings in audiobook MP3s and creates chaptered `.m4b` audiobook files.
 
-**Current application version: V3.48**
+**Current application version: V3.49**
 
 ## ✨ Features
 
@@ -62,31 +62,37 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 
 *After you select an MP3, the app checks it locally first. Minor Mage already contains 12 valid markers, so the app skips online validation and speech recognition and proceeds directly to creating the `.m4b`.*
 
-### 2. 🔎 Confirm an online book reference when needed
+### 2. 📚 Combine multiple MP3 files into one audiobook
+
+![The Combine MP3s tab ready to turn audiobook parts into one chaptered M4B](docs/screenshots/02-combine-mp3s-tab.png)
+
+*Use this screen when a book is supplied as several MP3 files. Add the files, review their natural listening order, edit chapter titles if needed, choose where to save, and create one chaptered `.m4b`.*
+
+### 3. 🔎 Confirm an online book reference when needed
 
 ![Confirmation dialog for the matched Elvenblood edition and its 10 chapters](docs/screenshots/02-confirm-book-reference.png)
 
 *If the MP3 has no embedded markers, the app can look for a published table of contents. Confirm the title, authors, chapter count, and source before using the reference.*
 
-### 3. ⚡ Verify AMD GPU acceleration
+### 4. ⚡ Verify AMD GPU acceleration
 
 ![Successful AMD Vulkan GPU test](docs/screenshots/03-amd-gpu-test-passed.png)
 
 *The GPU test confirms that the local speech-recognition engine can use an AMD graphics card through Vulkan.*
 
-### 4. ⏳ Review the long-book warning
+### 5. ⏳ Review the long-book warning
 
 ![Warning that a 13.4-hour audiobook may take a long time](docs/screenshots/04-long-book-warning.png)
 
 *Long audiobooks display a clear warning before processing begins. Keep the computer plugged in and prevent it from sleeping.*
 
-### 5. ✅ Watch verified chapters appear
+### 6. ✅ Watch verified chapters appear
 
 ![Elvenblood processing with all 10 verified chapters shown in green](docs/screenshots/05-verified-chapters-processing.png)
 
 *Detected chapters appear in bright green with timestamps. The counter shows progress against the verified reference, while the lower log reports validation, encoding progress, and the chosen audio bitrate.*
 
-### 6. 💾 Find the finished files beside the MP3
+### 7. 💾 Find the finished files beside the MP3
 
 ![Finished message confirming that the M4B and chapter list were saved](docs/screenshots/06-finished-confirmation.png)
 
@@ -99,9 +105,20 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 3. Double-click **Start Audiobook Maker V3.vbs**.
 4. Choose an audiobook MP3 and follow the prompts.
 
-The downloadable V3.48 ZIP has a simplified layout. Double-click **Start Audiobook Maker.vbs** at the top level. The technical scripts and private Python environment stay inside the `app` folder, which ordinary users can ignore.
+The downloadable V3.49 ZIP has a simplified layout. Double-click **Start Audiobook Maker.vbs** at the top level. The technical scripts and private Python environment stay inside the `app` folder, which ordinary users can ignore.
 
-To combine a folder of audiobook parts, open **Combine MP3s**, add the files, check their order and titles, choose the output name, and press **Start - Combine Into One Audiobook**. Each MP3 becomes one chapter, and the originals remain unchanged.
+## 📚 Combining multiple MP3 files
+
+Use **Combine MP3s** when an audiobook is already divided into separate MP3 tracks. This is faster and more reliable than listening for spoken headings because every input file becomes a known chapter boundary.
+
+1. Open **Combine MP3s**.
+2. Select **Add MP3 files…** and choose all parts of the book.
+3. Check the listening order. Numbered filenames are sorted naturally, and **Move up** or **Move down** can correct the order.
+4. Double-click a row or select **Edit title…** to change the chapter name.
+5. Choose the finished `.m4b` filename and location.
+6. Select **Start - Combine Into One Audiobook**.
+
+The app turns each MP3 into one chapter, preserves every original file, and shows conversion progress. It uses no more than the lowest source bitrate and never exceeds 96 kbps, avoiding a larger output that cannot improve the original audio. Keeping the MP3 files on a computer as the archive and using the single `.m4b` on a phone is generally the most convenient arrangement.
 
 The first run checks for Python and FFmpeg and creates a private Python environment. Whisper components and the speech model require an internet connection the first time they are installed or downloaded.
 

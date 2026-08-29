@@ -1,5 +1,9 @@
 # Changelog
 
+## V3.49
+
+- Expanded the README with a labeled Combine MP3s screenshot and a step-by-step guide covering file order, chapter titles, output location, source preservation, and bitrate handling.
+
 ## V3.48
 
 - Simplified the downloadable package to one obvious launcher and one readme at the top level, with all technical support files stored inside an `app` folder.
