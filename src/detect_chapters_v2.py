@@ -150,7 +150,14 @@ def write_validation_report(path: Path, selected: list[dict], candidates: list[d
 
 def page_based_candidates(anchors: list[tuple[int, float]], toc_pages: list[int], allow_extrapolation: bool = False) -> list[dict]:
     """Estimate chapter times from announced print-page positions."""
-    ordered = sorted({(page, stamp) for page, stamp in anchors})
+    # Page announcements must move forward as the audio moves forward. Whisper
+    # can occasionally hear "300" after page 301 when another number was
+    # spoken; keeping that anchor would place a later chapter before an earlier
+    # one. Preserve chronological order and reject backward/duplicate pages.
+    ordered = []
+    for page, stamp in sorted({(int(page), float(stamp)) for page, stamp in anchors}, key=lambda row: row[1]):
+        if ordered and page <= ordered[-1][0]: continue
+        ordered.append((page, stamp))
     if len(ordered) < 2: return []
     results = []
     for number, target in enumerate(toc_pages, 1):
@@ -163,6 +170,18 @@ def page_based_candidates(anchors: list[tuple[int, float]], toc_pages: list[int]
         results.append({"number": number, "title": f"Chapter {number}", "time": max(0.0, stamp), "score": 8,
                         "reasons": [f"verified contents page {target}", f"interpolated between spoken page {left[0]} and page {right[0]}"],
                         "before": "", "text": f"Estimated from announced print pages ({target})", "after": ""})
+    return results
+
+
+def corroborated_candidates(speech: list[dict], page_estimates: list[dict]) -> list[dict]:
+    """Promote an ambiguous spoken number when a page estimate supports it."""
+    results=[]
+    for estimate in page_estimates:
+        nearby=[candidate for candidate in speech if candidate.get("number")==estimate.get("number") and candidate.get("score",-99)>-5 and abs(candidate.get("time",0)-estimate.get("time",0))<=240]
+        if not nearby: continue
+        spoken=min(nearby,key=lambda candidate:abs(candidate["time"]-estimate["time"]))
+        results.append({**spoken,"score":max(10,spoken.get("score",0)+4),
+                        "reasons":spoken.get("reasons",[])+[f"verified page estimate corroborates spoken boundary within {abs(spoken['time']-estimate['time']):.0f}s"]})
     return results
 
 
@@ -287,7 +306,8 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
 def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard", toc_pages: list[int] | None = None, reference_chapters: list[dict] | None = None) -> tuple[list[dict], list[dict], bool]:
     saved=load_scan_evidence(source)
     if saved:
-        candidates,page_anchors=saved; candidates.extend(page_based_candidates(page_anchors,toc_pages or [],allow_extrapolation=True))
+        candidates,page_anchors=saved; pages=page_based_candidates(page_anchors,toc_pages or [],allow_extrapolation=True)
+        candidates.extend(pages+corroborated_candidates(candidates,pages))
         selected=select_sequence(candidates,expected,duration)
         print("Reusing saved scan evidence; the audiobook does not need to be transcribed again.",flush=True)
         for candidate in selected: add_heading(found,candidate["time"]-.75,candidate["title"])
@@ -331,7 +351,7 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
                     candidates.append({**title_match,"time":chunk_start + item.get("offsets",{}).get("from",0)/1000,"score":11,
                                        "reasons":["verified chapter title matched local transcript"],"before":"","text":item.get("text","").strip(),"after":""})
             page_candidates = page_based_candidates(page_anchors, toc_pages or [])
-            preview = select_sequence(candidates + page_candidates, expected, duration)
+            preview = select_sequence(candidates + page_candidates + corroborated_candidates(candidates,page_candidates), expected, duration)
             for candidate in preview:
                 number = candidate["number"]
                 if number not in reported_numbers:
@@ -355,7 +375,7 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
         if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
         save_scan_evidence(source,candidates,page_anchors)
         page_candidates = page_based_candidates(page_anchors, toc_pages or [], allow_extrapolation=True)
-        candidates.extend(page_candidates)
+        candidates.extend(page_candidates+corroborated_candidates(candidates,page_candidates))
         selected = select_sequence(candidates, expected, duration)
         for candidate in selected: add_heading(found, candidate["time"] - .75, candidate["title"])
         return selected, candidates, False

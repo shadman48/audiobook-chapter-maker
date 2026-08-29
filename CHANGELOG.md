@@ -24,4 +24,5 @@
 - Made ordered validation tolerate missing chapter numbers, added an expected-progress health check, and added verified print-page interpolation for recordings that announce pages instead of chapters.
 - Replaced book-specific Python constants with an external reference catalogue, added MP3 metadata/folder identification, community-catalogue updates, Open Library and Google Books lookup, local opening transcription fallback, caching, edition confirmation, and fuzzy chapter-title matching.
 - Tightened print-page anchors to explicit continuation announcements, corrected validation-report selection labels, and added reusable scan-evidence files so matching can be recalculated without retranscribing unchanged audio.
+- Added chronological page-anchor rejection and page-corroborated spoken boundaries, recovering all ten Elvenblood chapters from the saved evidence with more accurate timestamps.
 - Preserved source audio and avoided software-version labels in generated filenames.

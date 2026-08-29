@@ -17,6 +17,7 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Gap-tolerant validation: one missed heading no longer hides every later chapter
 - Verified print-page fallback for supported editions that announce page positions instead of chapter headings
 - Reusable scan evidence beside the MP3, allowing later matching improvements or reference changes without another full transcription
+- Cross-checking between page estimates and nearby spoken numbers to replace rough estimates with the actual narrated boundary
 - Add, edit, rename, or remove chapter markers
 - Scan one minute near an approximate timestamp to recover a missing chapter
 - Repair an existing `.m4b` without re-encoding its audio
