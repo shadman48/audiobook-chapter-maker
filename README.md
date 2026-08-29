@@ -17,6 +17,7 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Gap-tolerant validation: one missed heading no longer hides every later chapter
 - Verified print-page fallback for supported editions that announce page positions instead of chapter headings
 - Reusable scan evidence beside the MP3, allowing later matching improvements or reference changes without another full transcription
+- Interrupted or early-stopped scans are marked as partial and resume from the saved position instead of being mistaken for a completed scan
 - Cross-checking between page estimates and nearby spoken numbers to replace rough estimates with the actual narrated boundary
 - Add, edit, rename, or remove chapter markers
 - Scan one minute near an approximate timestamp to recover a missing chapter
@@ -64,6 +65,8 @@ The Processor menu offers **Automatic**, **Require NVIDIA GPU**, and **CPU only*
 Current faster-whisper GPU releases require an NVIDIA CUDA-capable GPU together with CUDA 12 cuBLAS and cuDNN 9 libraries available on the Windows PATH. An ordinary GPU driver alone may not be sufficient. See the [faster-whisper GPU requirements](https://github.com/SYSTRAN/faster-whisper#gpu).
 
 AMD acceleration is automatic. On an AMD computer, the app downloads a pinned Vulkan-enabled `whisper.cpp` engine and GGML English model on first use, verifies their SHA-256 checksums, installs them under Local AppData, and performs a real Vulkan test. Subsequent runs reuse those files. AMD mode scans the full audiobook in manageable sections.
+
+If a scan stops early because too few headings were recognized in the first two hours, its evidence is saved as partial. A later retry keeps those results and continues after the two-hour point. Saved modest-confidence headings can also be accepted when their number, order, timing, and verified expected chapter count support them.
 
 The pinned Windows engine comes from [Lemonade SDK's AMD-focused whisper.cpp release](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/tag/v1.8.4), and the model comes from the [official whisper.cpp model repository](https://huggingface.co/ggerganov/whisper.cpp). See the [whisper.cpp Vulkan documentation](https://github.com/ggml-org/whisper.cpp#vulkan-gpu-support).
 

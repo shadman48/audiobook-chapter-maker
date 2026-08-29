@@ -25,4 +25,5 @@
 - Replaced book-specific Python constants with an external reference catalogue, added MP3 metadata/folder identification, community-catalogue updates, Open Library and Google Books lookup, local opening transcription fallback, caching, edition confirmation, and fuzzy chapter-title matching.
 - Tightened print-page anchors to explicit continuation announcements, corrected validation-report selection labels, and added reusable scan-evidence files so matching can be recalculated without retranscribing unchanged audio.
 - Added chronological page-anchor rejection and page-corroborated spoken boundaries, recovering all ten Elvenblood chapters from the saved evidence with more accurate timestamps.
+- Fixed early-stopped evidence being reused as though it represented a complete scan. Partial AMD scans now resume from their saved position, and ordered modest-confidence headings can be recovered when a verified chapter count supports them.
 - Preserved source audio and avoided software-version labels in generated filenames.

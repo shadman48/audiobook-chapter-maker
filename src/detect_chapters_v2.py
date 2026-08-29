@@ -124,7 +124,10 @@ def select_sequence(candidates: list[dict], expected: int, duration: float) -> l
     # Keep strong, chronologically ordered evidence even when one chapter is
     # missed. The old implementation required an unbroken 1,2,3... chain, so a
     # missing Chapter 2 hid every valid later chapter from the user.
-    usable = sorted((c for c in candidates if c["number"] and 1 <= c["number"] <= expected and c["score"] >= 7), key=lambda c: (c["time"], c["number"]))
+    # With a verified expected count, ordered numbering and plausible timing
+    # provide useful corroboration. Accept modest score-5 candidates here while
+    # still rejecting heavily penalized ordinary-number uses.
+    usable = sorted((c for c in candidates if c["number"] and 1 <= c["number"] <= expected and c["score"] >= 5), key=lambda c: (c["time"], c["number"]))
     if not usable: return []
     average = duration / expected; states: list[tuple[int, float, list[dict]]] = []
     for index, candidate in enumerate(usable):
@@ -205,19 +208,25 @@ def scan_evidence_path(source: Path) -> Path:
     return source.with_name(source.stem + " - scan evidence.json")
 
 
-def save_scan_evidence(source: Path, candidates: list[dict], page_anchors: list[tuple[int, float]]) -> None:
+def save_scan_evidence(source: Path, candidates: list[dict], page_anchors: list[tuple[int, float]], complete: bool, processed_seconds: float) -> None:
     stat = source.stat(); path = scan_evidence_path(source); working = path.with_suffix(".working.json")
-    data = {"format_version":1,"source_size":stat.st_size,"source_mtime_ns":stat.st_mtime_ns,
-            "speech_candidates":candidates,"page_anchors":page_anchors}
+    data = {"format_version":2,"source_size":stat.st_size,"source_mtime_ns":stat.st_mtime_ns,"complete":complete,
+            "processed_seconds":processed_seconds,"speech_candidates":candidates,"page_anchors":page_anchors}
     working.write_text(json.dumps(data,indent=2),encoding="utf-8"); working.replace(path)
 
 
-def load_scan_evidence(source: Path) -> tuple[list[dict], list[tuple[int,float]]] | None:
+def load_scan_evidence(source: Path) -> dict | None:
     path=scan_evidence_path(source)
     try:
         data=json.loads(path.read_text(encoding="utf-8")); stat=source.stat()
-        if data.get("format_version") != 1 or data.get("source_size") != stat.st_size or data.get("source_mtime_ns") != stat.st_mtime_ns: return None
-        return data.get("speech_candidates",[]),[(int(page),float(stamp)) for page,stamp in data.get("page_anchors",[])]
+        if data.get("format_version") not in (1,2) or data.get("source_size") != stat.st_size or data.get("source_mtime_ns") != stat.st_mtime_ns: return None
+        anchors=[(int(page),float(stamp)) for page,stamp in data.get("page_anchors",[])]
+        candidates=data.get("speech_candidates",[])
+        if data.get("format_version")==1:
+            latest=max([stamp for _,stamp in anchors]+[float(c.get("time",0)) for c in candidates]+[0])
+            complete=latest>=7200; processed=latest if complete else 7200
+        else: complete=bool(data.get("complete")); processed=float(data.get("processed_seconds",0))
+        return {"speech_candidates":candidates,"page_anchors":anchors,"complete":complete,"processed_seconds":processed}
     except (OSError,ValueError,TypeError): return None
 
 
@@ -305,8 +314,8 @@ def full_scan(model, source: Path, found: list[tuple[float, str]], expected: int
 
 def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: list[tuple[float, str]], expected: int = 0, tuning: str = "standard", toc_pages: list[int] | None = None, reference_chapters: list[dict] | None = None) -> tuple[list[dict], list[dict], bool]:
     saved=load_scan_evidence(source)
-    if saved:
-        candidates,page_anchors=saved; pages=page_based_candidates(page_anchors,toc_pages or [],allow_extrapolation=True)
+    if saved and saved["complete"]:
+        candidates=list(saved["speech_candidates"]); page_anchors=list(saved["page_anchors"]); pages=page_based_candidates(page_anchors,toc_pages or [],allow_extrapolation=True)
         candidates.extend(pages+corroborated_candidates(candidates,pages))
         selected=select_sequence(candidates,expected,duration)
         print("Reusing saved scan evidence; the audiobook does not need to be transcribed again.",flush=True)
@@ -321,9 +330,16 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
         print(f"AMD tuning: using {feeder_threads} CPU feeder threads.", flush=True)
         silences = detect_silence_ranges(source)
         chunk_seconds = 900 if tuning == "short-pauses" else 1800
-        total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False; candidates: list[dict] = []
-        scan_started = time.monotonic(); audio_checked = 0.0; reported_numbers: set[int] = set(); health_checked = False; page_anchors: list[tuple[int,float]] = []
-        for chunk_index in range(total_chunks):
+        total_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds)); backend_seen = False
+        candidates=list(saved["speech_candidates"]) if saved else []; page_anchors=list(saved["page_anchors"]) if saved else []
+        audio_checked=min(duration,float(saved["processed_seconds"])) if saved else 0.0; start_chunk=min(total_chunks,int(audio_checked//chunk_seconds))
+        scan_started = time.monotonic(); run_audio_checked=0.0; reported_numbers: set[int] = set(); health_checked = audio_checked>=7200
+        if saved:
+            print(f"Resuming the saved partial scan at {clock(audio_checked)}; completed audio will not be scanned again.",flush=True)
+            existing_pages=page_based_candidates(page_anchors,toc_pages or [])
+            for candidate in select_sequence(candidates+existing_pages+corroborated_candidates(candidates,existing_pages),expected,duration):
+                reported_numbers.add(candidate["number"]); print(f"FOUND_CHAPTER: {candidate['title']} at {clock(candidate['time'])} (saved partial match)",flush=True)
+        for chunk_index in range(start_chunk,total_chunks):
             chunk_start = chunk_index * chunk_seconds
             subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", str(chunk_start), "-i", str(source), "-t", str(min(chunk_seconds + 5, duration - chunk_start)), "-ac", "1", "-ar", "16000", str(chunk)], check=True, creationflags=NO_WINDOW)
             command = [str(cli), "-m", str(model), "-f", str(chunk), "-l", "en", "-t", str(feeder_threads), "-ojf", "-of", str(output_base), "-pp"]
@@ -365,15 +381,15 @@ def amd_full_scan(cli: Path, model: Path, source: Path, duration: float, found: 
             if duration > 7200 and audio_checked >= 7200 and not health_checked:
                 health_checked = True
                 if len(preview) < minimum_progress:
-                    save_scan_evidence(source,candidates,page_anchors)
+                    save_scan_evidence(source,candidates,page_anchors,False,audio_checked)
                     print(f"EARLY_TOO_FEW_CHAPTERS: {len(preview)}/{minimum_progress}/02:00:00", flush=True)
                     print(f"Only {len(preview)} chapter(s) were recognized after two hours; at least {minimum_progress} were expected by this point. The scan was stopped early.", flush=True)
                     return [], candidates, True
-            elapsed = max(0.01, time.monotonic() - scan_started); speed = audio_checked / elapsed
+            run_audio_checked += min(chunk_seconds,duration-chunk_start); elapsed = max(0.01, time.monotonic() - scan_started); speed = run_audio_checked / elapsed
             remaining = max(0.0, duration - audio_checked) / max(0.01, speed)
             print(f"  Transcription speed: {speed:.1f}x real-time | Scan remaining: {clock(remaining)}", flush=True)
         if not backend_seen: raise RuntimeError("The installed whisper.cpp engine did not report an active Vulkan backend.")
-        save_scan_evidence(source,candidates,page_anchors)
+        save_scan_evidence(source,candidates,page_anchors,True,duration)
         page_candidates = page_based_candidates(page_anchors, toc_pages or [], allow_extrapolation=True)
         candidates.extend(page_candidates+corroborated_candidates(candidates,page_candidates))
         selected = select_sequence(candidates, expected, duration)
