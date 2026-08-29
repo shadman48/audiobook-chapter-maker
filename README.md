@@ -2,7 +2,7 @@
 
 A simple Windows app that detects spoken chapter headings in audiobook MP3s and creates chaptered `.m4b` audiobook files.
 
-## Features
+## ✨ Features
 
 - Clean desktop interface for nontechnical users
 - Automatic reuse of valid chapter markers already embedded in an MP3, avoiding an unnecessary speech scan
@@ -30,21 +30,45 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Long-book warning, cancellation, and protection against accidental closing
 - Visible Report a Bug button linked to a guided GitHub issue form
 
-## Screenshots
+## 🖼️ Guided walkthrough
 
-![Create Audiobook screen ready for a new MP3](docs/screenshots/create-audiobook-ready.png)
+### 1. 🎧 Use chapters already stored in the MP3
 
-*The Create Audiobook screen when first opened, ready for the user to choose an MP3 and optionally validate the expected chapter count.*
+![Minor Mage being converted using 12 chapter markers already stored in its MP3](docs/screenshots/01-embedded-chapters-processing.png)
 
-![Audiobook processing with progress and time estimate](docs/screenshots/creating-audiobook-progress.png)
+*After you select an MP3, the app checks it locally first. Minor Mage already contains 12 valid markers, so the app skips online validation and speech recognition and proceeds directly to creating the `.m4b`.*
 
-*An audiobook being processed, with the current stage, progress bar, elapsed time, estimated remaining time, detected headings, and Cancel button visible.*
+### 2. 🔎 Confirm an online book reference when needed
 
-![Fix Chapters screen ready to load an audiobook](docs/screenshots/fix-chapters-ready.png)
+![Confirmation dialog for the matched Elvenblood edition and its 10 chapters](docs/screenshots/02-confirm-book-reference.png)
 
-*The Fix Chapters screen, where users can load their `.m4b` and chapter-list files, then add, edit, delete, or save repaired chapter markers.*
+*If the MP3 has no embedded markers, the app can look for a published table of contents. Confirm the title, authors, chapter count, and source before using the reference.*
 
-## Windows quick start
+### 3. ⚡ Verify AMD GPU acceleration
+
+![Successful AMD Vulkan GPU test](docs/screenshots/03-amd-gpu-test-passed.png)
+
+*The GPU test confirms that the local speech-recognition engine can use an AMD graphics card through Vulkan.*
+
+### 4. ⏳ Review the long-book warning
+
+![Warning that a 13.4-hour audiobook may take a long time](docs/screenshots/04-long-book-warning.png)
+
+*Long audiobooks display a clear warning before processing begins. Keep the computer plugged in and prevent it from sleeping.*
+
+### 5. ✅ Watch verified chapters appear
+
+![Elvenblood processing with all 10 verified chapters shown in green](docs/screenshots/05-verified-chapters-processing.png)
+
+*Detected chapters appear in bright green with timestamps. The counter shows progress against the verified reference, while the lower log reports validation, encoding progress, and the chosen audio bitrate.*
+
+### 6. 💾 Find the finished files beside the MP3
+
+![Finished message confirming that the M4B and chapter list were saved](docs/screenshots/06-finished-confirmation.png)
+
+*When processing finishes, the app confirms that the `.m4b` and readable chapter list were saved in the same folder as the original MP3.*
+
+## 🚀 Windows quick start
 
 1. Download or clone the repository.
 2. Open the `launchers` folder.
@@ -55,14 +79,14 @@ The first run checks for Python and FFmpeg and creates a private Python environm
 
 When an MP3 is selected, the app checks it locally before attempting an online lookup. If it already contains valid chapter markers, their count is displayed immediately and the app creates the `.m4b` without online validation or speech recognition. Online chapter information is only supporting evidence for files that do not already contain usable markers.
 
-## Requirements
+## 📋 Requirements
 
 - Windows 10 or 11
 - Python 3.9 or newer; Python 3.11 or 3.12 is recommended
 - FFmpeg and ffprobe
 - Several GB of free disk space
 
-## GPU acceleration
+## ⚡ GPU acceleration
 
 The Processor menu offers **Automatic**, **Require NVIDIA GPU**, and **CPU only**. The **Test NVIDIA GPU** button performs a real Whisper transcription test. Automatic clearly reports the active processor; Require NVIDIA GPU stops with setup guidance instead of silently using the CPU.
 
@@ -74,16 +98,16 @@ If a scan stops early because too few headings were recognized in the first two 
 
 The pinned Windows engine comes from [Lemonade SDK's AMD-focused whisper.cpp release](https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/tag/v1.8.4), and the model comes from the [official whisper.cpp model repository](https://huggingface.co/ggerganov/whisper.cpp). See the [whisper.cpp Vulkan documentation](https://github.com/ggml-org/whisper.cpp#vulkan-gpu-support).
 
-## Reporting bugs
+## 🐞 Reporting bugs
 
 Use the visible **Report a Bug** button in the app. It opens a guided GitHub issue form in the browser so reports appear directly in this repository. A GitHub account is required to submit the issue. Do not attach copyrighted audiobook audio.
 
-## Privacy
+## 🔒 Privacy
 
 Audio processing and opening-audio identification run locally. The application never uploads audiobook audio and does not call ChatGPT or another cloud AI service. The optional book-information lookup sends text metadata inferred from MP3 tags, filenames/folders, or the locally transcribed opening to the project catalogue, Open Library, and Google Books. Successful references are cached under Local AppData.
 
 Creating a new `.m4b` requires converting MP3 audio to AAC for broad audiobook-player compatibility. The app reads the source audio bitrate and never selects a higher output bitrate; it also caps audiobook output at 96 kbps. Editing chapter markers in an existing `.m4b` uses stream copying and does not re-encode its audio.
 
-## Current status
+## 🚧 Current status
 
 This is an early public version under active development. Verify generated chapter lists before relying on them.
