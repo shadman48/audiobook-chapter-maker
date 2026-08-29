@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Added automatic detection and reuse of valid chapters embedded in source MP3 files, bypassing speech recognition and online validation when they are unnecessary.
+- Added automatic detection and reuse of valid chapters embedded in source MP3 files. Selection and Lookup now perform this local check first, display the embedded count immediately, and bypass speech recognition and online validation when unnecessary.
 - Added a simple Windows desktop interface.
 - Added fast pause-guided Whisper chapter detection.
 - Added expected-chapter validation and local reference fallbacks.

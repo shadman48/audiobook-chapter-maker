@@ -52,7 +52,7 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 
 The first run checks for Python and FFmpeg and creates a private Python environment. Whisper components and the speech model require an internet connection the first time they are installed or downloaded.
 
-When the selected MP3 already contains valid chapter markers, the app uses them directly and creates the `.m4b` without running speech recognition. Online chapter information is only supporting evidence for files that do not already contain usable markers.
+When an MP3 is selected, the app checks it locally before attempting an online lookup. If it already contains valid chapter markers, their count is displayed immediately and the app creates the `.m4b` without online validation or speech recognition. Online chapter information is only supporting evidence for files that do not already contain usable markers.
 
 ## Requirements
 

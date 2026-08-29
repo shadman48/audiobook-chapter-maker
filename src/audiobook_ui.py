@@ -24,6 +24,16 @@ def esc(s): return s.replace('\\','\\\\').replace('=','\\=').replace(';','\\;').
 def duration(path):
     r=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
     return float(r.stdout.strip())
+def embedded_chapter_count(path):
+    try:
+        result=subprocess.run(['ffprobe','-v','error','-show_chapters','-of','json',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
+        items=json.loads(result.stdout or '{}').get('chapters',[]); previous=-1.0
+        for item in items:
+            start=float(item['start_time'])
+            if start < 0 or start <= previous:return 0
+            previous=start
+        return len(items) if len(items)>=2 else 0
+    except Exception:return 0
 def sha256(path):
     digest=hashlib.sha256()
     with open(path,'rb') as stream:
@@ -177,7 +187,8 @@ class App(tk.Tk):
         tabs=ttk.Notebook(self); tabs.pack(fill='both',expand=True,padx=20,pady=16)
         self.create=ttk.Frame(tabs,padding=18); self.fix=ttk.Frame(tabs,padding=18); tabs.add(self.create,text='  Create Audiobook  '); tabs.add(self.fix,text='  Fix Chapters  ')
         self.make_create(); self.make_fix(); self.protocol('WM_DELETE_WINDOW',self.on_close); self.after(150,self.poll); self.after(1000,self.tick)
-        if len(sys.argv)>1: self.source.set(str(Path(sys.argv[1]).resolve()))
+        if len(sys.argv)>1:
+            self.source.set(str(Path(sys.argv[1]).resolve())); self.after(100,self.inspect_selected_mp3)
 
     def file_row(self,parent,var,label,types,command=None):
         ttk.Label(parent,text=label).pack(anchor='w'); row=ttk.Frame(parent); row.pack(fill='x',pady=(4,14)); ttk.Entry(row,textvariable=var).pack(side='left',fill='x',expand=True)
@@ -185,7 +196,7 @@ class App(tk.Tk):
 
     def make_create(self):
         self.source=tk.StringVar(); self.expected=tk.StringVar(value='Unknown')
-        self.file_row(self.create,self.source,'Audiobook MP3',[('MP3 audiobook','*.mp3')])
+        self.file_row(self.create,self.source,'Audiobook MP3',[('MP3 audiobook','*.mp3')],self.choose_source_mp3)
         box=ttk.LabelFrame(self.create,text='Validation',padding=12); box.pack(fill='x')
         ttk.Label(box,text='Expected chapters:').grid(row=0,column=0,sticky='w'); ttk.Label(box,textvariable=self.expected).grid(row=0,column=1,sticky='w',padx=8)
         ttk.Button(box,text='Look up online',command=self.lookup).grid(row=0,column=2,padx=8); ttk.Button(box,text='Enter manually',command=self.manual_expected).grid(row=0,column=3)
@@ -206,6 +217,24 @@ class App(tk.Tk):
         ttk.Label(self.create,textvariable=self.chapter_status,font=('Segoe UI Semibold',11),foreground='#008a2e').pack(anchor='w',pady=(0,6))
         self.log=tk.Text(self.create,height=10,state='disabled',wrap='word'); self.log.pack(fill='both',expand=True)
         self.log.tag_configure('chapter_found',foreground='#00a83b',font=('Segoe UI Semibold',10))
+
+    def choose_source_mp3(self):
+        selected=filedialog.askopenfilename(filetypes=[('MP3 audiobook','*.mp3')])
+        if selected:self.source.set(selected); self.inspect_selected_mp3()
+
+    def inspect_selected_mp3(self):
+        p=Path(self.source.get())
+        if not p.is_file():return 0
+        count=embedded_chapter_count(p)
+        if count:
+            self.current_reference=None; self.expected.set(f'{count} — already stored in MP3')
+            self.chapter_status.set(f'Chapters found in MP3: {count}')
+            self.job_status.set('Ready — existing MP3 chapters will be used')
+            self.write(f'Local MP3 check: found {count} valid embedded chapter markers. Online lookup and speech recognition are not needed.')
+        else:
+            self.expected.set('Unknown'); self.chapter_status.set('Chapters found: 0')
+            self.job_status.set('No embedded chapters — online lookup or speech detection can be used')
+        return count
 
     def make_fix(self):
         self.audio=tk.StringVar(); self.chapterfile=tk.StringVar()
@@ -341,6 +370,10 @@ class App(tk.Tk):
     def lookup(self):
         p=Path(self.source.get())
         if not p.is_file(): return messagebox.showerror('Choose a file','Please choose an audiobook MP3 first.')
+        count=self.inspect_selected_mp3()
+        if count:
+            self.job_status.set(f'Ready — using {count} chapters already stored in the MP3')
+            return
         self.job_status.set('Looking up the book and its table of contents…')
         def work():
             try:
