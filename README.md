@@ -4,31 +4,51 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 
 ## ✨ Features
 
-- Clean desktop interface for nontechnical users
-- Automatic reuse of valid chapter markers already embedded in an MP3, avoiding an unnecessary speech scan
-- Faster local Whisper scanning around likely chapter breaks
-- Local speech recognition after the initial model download
-- Standalone chapter-reference lookup using MP3 tags, filenames/folders, Open Library, Google Books, and a downloadable community catalogue
-- Local reference caching with chapter numbers, titles, and printed starting pages when available
-- Missing-chapter reporting
-- One scan per run—there are no automatic repeat scans
-- If validation is incomplete, a simple popup offers optional higher-accuracy or shorter-pause retry settings
-- Early safety stop when chapter discovery is far behind the expected pace after two hours
-- Recognition of word-only announcements such as `Seven.` as well as `Chapter Seven`
-- Gap-tolerant validation: one missed heading no longer hides every later chapter
-- Verified print-page fallback for supported editions that announce page positions instead of chapter headings
-- Reusable scan evidence beside the MP3, allowing later matching improvements or reference changes without another full transcription
-- Interrupted or early-stopped scans are marked as partial and resume from the saved position instead of being mistaken for a completed scan
-- Cross-checking between page estimates and nearby spoken numbers to replace rough estimates with the actual narrated boundary
+### 🎧 Finds chapters intelligently
+
+- Checks the MP3 first and automatically reuses valid embedded chapter markers
+- Recognizes headings such as `Chapter Seven`, `Seven.`, and headings joined to nearby narration
+- Scans likely chapter breaks with local Whisper speech recognition
+- Cross-checks spoken numbers, surrounding context, silence, timing, and chapter order
+- Supports verified print-page estimates when a recording announces page positions instead of chapter headings
+
+### 🌐 Adds supporting book information
+
+- Identifies books from MP3 tags, filenames, folders, or a locally transcribed opening
+- Looks for chapter counts, titles, and printed starting pages through the community catalogue, Open Library, and Google Books
+- Caches successful references locally for later use
+- Uses online information as supporting evidence—the audiobook audio is never uploaded
+
+### ✅ Validates before creating
+
+- Reports missing chapters and keeps later valid chapters even when one heading is missed
+- Runs only one scan at a time and never retries without permission
+- Offers optional higher-accuracy or shorter-pause settings when a scan is incomplete
+- Stops early when chapter discovery is far behind the expected pace after two hours
+- Saves partial evidence and resumes from the saved position instead of repeating completed work
+
+### ✏️ Makes chapters easy to repair
+
 - Add, edit, rename, or remove chapter markers
 - Scan one minute near an approximate timestamp to recover a missing chapter
 - Repair an existing `.m4b` without re-encoding its audio
+- Recalculate matches from saved scan evidence without transcribing the full book again
+
+### ⚡ Uses your computer efficiently
+
+- Supports NVIDIA CUDA, AMD Vulkan, and CPU processing
+- Keeps speech recognition local after the initial engine and model downloads
+- Caps AAC output at the source MP3 bitrate and 96 kbps maximum
+- Avoids wasting storage on a bitrate that cannot improve the original recording
+
+### 🛡️ Designed for everyday use
+
+- Clean desktop interface for nontechnical users
 - Preserves the original MP3 and earlier audiobook files
-- Caps AAC output at the source MP3 bitrate (and 96 kbps maximum), avoiding larger files that cannot improve the original audio
 - Silent Windows launcher with progress shown inside the app
-- Real progress and activity indicators, elapsed time, and estimated time remaining
+- Shows live chapter discoveries, progress, elapsed time, and estimated time remaining
 - Long-book warning, cancellation, and protection against accidental closing
-- Visible Report a Bug button linked to a guided GitHub issue form
+- Visible **Report a Bug** button linked to a guided GitHub issue form
 
 ## 🖼️ Guided walkthrough
 
