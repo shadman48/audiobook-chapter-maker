@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added automatic detection and reuse of valid chapters embedded in source MP3 files, bypassing speech recognition and online validation when they are unnecessary.
 - Added a simple Windows desktop interface.
 - Added fast pause-guided Whisper chapter detection.
 - Added expected-chapter validation and local reference fallbacks.

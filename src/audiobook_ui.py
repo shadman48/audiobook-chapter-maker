@@ -437,6 +437,12 @@ class App(tk.Tk):
                         match=re.search(r'(\d+)\s*/\s*(\d+)',line)
                         if match: incomplete=(int(match.group(1)),int(match.group(2)))
                         continue
+                    if line.startswith('EMBEDDED_CHAPTERS:'):
+                        count=int(line.split(':',1)[1].strip())
+                        self.q.put(('chapter_count',f'Chapters found in MP3: {count}'))
+                        self.q.put(('chapter_log',f'Using {count} chapter markers already stored in the MP3'))
+                        self.q.put(('progress',{'percent':80,'status':'Using chapters already stored in the MP3…'}))
+                        continue
                     if line.startswith('FOUND_CHAPTER:'):
                         message=line.split(':',1)[1].strip(); match=re.search(r'Chapter\s+(\d+)',message,re.I)
                         if match:self.live_chapters.add(int(match.group(1)))

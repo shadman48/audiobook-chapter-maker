@@ -41,6 +41,24 @@ def probe_duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
+def probe_embedded_chapters(path: Path, duration: float) -> list[tuple[float, str]]:
+    """Return trustworthy chapter starts already stored in the source file."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_chapters", "-of", "json", str(path)],
+        check=True, capture_output=True, text=True, creationflags=NO_WINDOW,
+    )
+    data = json.loads(out.stdout or "{}")
+    found: list[tuple[float, str]] = []
+    previous = -1.0
+    for index, item in enumerate(data.get("chapters", []), 1):
+        try: start = float(item["start_time"])
+        except (KeyError, TypeError, ValueError): return []
+        if start < 0 or start <= previous or start >= duration: return []
+        title = str(item.get("tags", {}).get("title") or f"Chapter {index}").strip()
+        found.append((start, title or f"Chapter {index}")); previous = start
+    return found if len(found) >= 2 else []
+
+
 def escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("=", "\\=").replace(";", "\\;").replace("#", "\\#").replace("\n", " ")
 
@@ -419,7 +437,13 @@ def main() -> int:
     if not shutil.which("ffmpeg") or not shutil.which("ffprobe"): raise SystemExit("FFmpeg and ffprobe are required.")
 
     duration = probe_duration(source)
-    if args.device == "amd":
+    embedded = probe_embedded_chapters(source, duration)
+    if embedded:
+        found = embedded
+        print(f"EMBEDDED_CHAPTERS: {len(found)}", flush=True)
+        print(f"Found {len(found)} valid chapter markers already stored in the MP3.", flush=True)
+        print("Using those markers directly; speech recognition and online chapter validation are not needed.", flush=True)
+    elif args.device == "amd":
         if not args.amd_cli or not args.amd_cli.is_file() or not args.amd_model or not args.amd_model.is_file():
             raise RuntimeError("AMD Vulkan mode requires a Vulkan whisper-cli executable and GGML model.")
         found: list[tuple[float, str]] = []
