@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## V3.48
 
 - Added a nontechnical **Combine MP3s** tab that naturally sorts audiobook parts, turns each file into a chapter, supports reordering and title editing, shows conversion progress, preserves the originals, and respects the lowest source bitrate.
 - Changed `.m4b` creation to cap AAC output at the original MP3 audio bitrate and 96 kbps, preventing pointless size and encoding overhead from selecting a bitrate above the source.

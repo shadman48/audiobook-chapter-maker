@@ -2,6 +2,8 @@
 
 A simple Windows app that detects spoken chapter headings in audiobook MP3s and creates chaptered `.m4b` audiobook files.
 
+**Current application version: V3.48**
+
 ## ✨ Features
 
 ### 🎧 Finds chapters intelligently

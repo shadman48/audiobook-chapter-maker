@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 TIME_RE=re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{1,2})(?:\.(\d+))?$")
 ROW_RE=re.compile(r"^\s*\d+\s+(\d\d:\d\d:\d\d)\s+(.+?)\s*$")
 NO_WINDOW=0x08000000 if sys.platform=='win32' else 0
+APP_VERSION='3.48'
 AMD_ENGINE_URL='https://github.com/lemonade-sdk/whisper.cpp-rocm/releases/download/v1.8.4/whisper-v1.8.4-windows-vulkan-x64.zip'
 AMD_ENGINE_SHA256='e0d20a0f92e31b98adc0faf71172efc810b701e6391a9d858ca045bff26f77cd'
 AMD_MODEL_URL='https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin'
@@ -65,7 +66,7 @@ def reference_books():
     return list(unique.values())
 def refresh_reference_catalog():
     destination=app_data_dir()/'community-references.json'; destination.parent.mkdir(parents=True,exist_ok=True)
-    request=urllib.request.Request(COMMUNITY_CATALOG_URL,headers={'User-Agent':'AudiobookChapterMaker/0.3'})
+    request=urllib.request.Request(COMMUNITY_CATALOG_URL,headers={'User-Agent':f'AudiobookChapterMaker/{APP_VERSION}'})
     with urllib.request.urlopen(request,timeout=15) as response: data=response.read()
     parsed=json.loads(data.decode('utf-8'))
     if not isinstance(parsed.get('books'),list): raise ValueError('The community reference catalogue has an invalid format.')
@@ -96,7 +97,7 @@ def save_cached_reference(book):
     existing=[item for item in existing if (normalized(item.get('title','')),tuple(item.get('authors',[])))!=key]
     existing.append(book); path.write_text(json.dumps({'format_version':1,'books':existing},indent=2),encoding='utf-8')
 def fetch_json(url):
-    request=urllib.request.Request(url,headers={'User-Agent':'AudiobookChapterMaker/0.3 (https://github.com/shadman48/audiobook-chapter-maker)'})
+    request=urllib.request.Request(url,headers={'User-Agent':f'AudiobookChapterMaker/{APP_VERSION} (https://github.com/shadman48/audiobook-chapter-maker)'})
     with urllib.request.urlopen(request,timeout=15) as response: return json.load(response)
 def toc_entries(raw):
     chapters=[]
@@ -189,12 +190,12 @@ def detect_graphics_names():
 
 class App(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title('Audiobook Maker V3'); self.geometry('780x620'); self.minsize(700,540)
+        super().__init__(); self.title(f'Audiobook Maker V{APP_VERSION}'); self.geometry('780x620'); self.minsize(700,540)
         self.option_add('*Font',('Segoe UI',10)); self.q=queue.Queue(); self.chapters=[]
         self.running=False; self.cancelled=False; self.job_proc=None; self.started_at=0; self.last_percent=0; self.live_chapters=set(); self.current_reference=None
         style=ttk.Style(self); style.configure('Title.TLabel',font=('Segoe UI Semibold',18)); style.configure('Accent.TButton',font=('Segoe UI Semibold',10))
         header=ttk.Frame(self); header.pack(fill='x',padx=24,pady=(20,6))
-        ttk.Label(header,text='Audiobook Maker',style='Title.TLabel').pack(side='left')
+        ttk.Label(header,text=f'Audiobook Maker V{APP_VERSION}',style='Title.TLabel').pack(side='left')
         ttk.Button(header,text='Report a Bug',command=self.report_bug).pack(side='right')
         ttk.Label(self,text='Create and repair your chaptered .m4b audiobook file. Your source files are never changed.').pack(anchor='w',padx=24)
         tabs=ttk.Notebook(self); tabs.pack(fill='both',expand=True,padx=20,pady=16)
@@ -562,7 +563,7 @@ class App(tk.Tk):
             try:
                 script=Path(__file__).with_name('detect_chapters_v2.py')
                 if not script.is_file():
-                    raise FileNotFoundError('The V3 engine file detect_chapters_v2.py is missing. Extract every file from the V3 ZIP into the same folder.')
+                    raise FileNotFoundError('The audiobook engine file detect_chapters_v2.py is missing. Extract every file from the downloaded ZIP into the same folder.')
                 command=[sys.executable,'-u',str(script),str(p)]
                 if expected_total: command += ['--expected',expected_total]
                 chapters=(self.current_reference or {}).get('chapters',[])
