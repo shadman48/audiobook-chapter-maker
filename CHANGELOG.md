@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added a nontechnical **Combine MP3s** tab that naturally sorts audiobook parts, turns each file into a chapter, supports reordering and title editing, shows conversion progress, preserves the originals, and respects the lowest source bitrate.
 - Changed `.m4b` creation to cap AAC output at the original MP3 audio bitrate and 96 kbps, preventing pointless size and encoding overhead from selecting a bitrate above the source.
 - Added automatic detection and reuse of valid chapters embedded in source MP3 files. Selection and Lookup now perform this local check first, display the embedded count immediately, and bypass speech recognition and online validation when unnecessary.
 - Added a simple Windows desktop interface.

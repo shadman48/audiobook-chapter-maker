@@ -29,6 +29,8 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 
 ### ✏️ Makes chapters easy to repair
 
+- Combines multiple MP3 files into one `.m4b`, using each file as a chapter
+- Sorts selected files naturally and lets you reorder them or edit their chapter titles
 - Add, edit, rename, or remove chapter markers
 - Scan one minute near an approximate timestamp to recover a missing chapter
 - Repair an existing `.m4b` without re-encoding its audio
@@ -94,6 +96,8 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 2. Open the `launchers` folder.
 3. Double-click **Start Audiobook Maker V3.vbs**.
 4. Choose an audiobook MP3 and follow the prompts.
+
+To combine a folder of audiobook parts, open **Combine MP3s**, add the files, check their order and titles, choose the output name, and press **Start - Combine Into One Audiobook**. Each MP3 becomes one chapter, and the originals remain unchanged.
 
 The first run checks for Python and FFmpeg and creates a private Python environment. Whisper components and the speech model require an internet connection the first time they are installed or downloaded.
 

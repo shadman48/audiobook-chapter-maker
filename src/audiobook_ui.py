@@ -24,6 +24,19 @@ def esc(s): return s.replace('\\','\\\\').replace('=','\\=').replace(';','\\;').
 def duration(path):
     r=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
     return float(r.stdout.strip())
+def audio_bitrate(path):
+    try:
+        r=subprocess.run(['ffprobe','-v','error','-select_streams','a:0','-show_entries','stream=bit_rate','-of','default=nw=1:nk=1',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
+        return int(r.stdout.strip())
+    except Exception:
+        try:return int(path.stat().st_size*8/max(1,duration(path)))
+        except Exception:return 96000
+def natural_key(path):
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)',Path(path).name)]
+def filename_chapter_title(path,index):
+    title=Path(path).stem.replace('_',' ').strip()
+    title=re.sub(r'^\s*\d+\s*[-.)_ ]+\s*','',title).strip()
+    return title or f'Chapter {index}'
 def embedded_chapter_count(path):
     try:
         result=subprocess.run(['ffprobe','-v','error','-show_chapters','-of','json',str(path)],capture_output=True,text=True,check=True,creationflags=NO_WINDOW)
@@ -185,8 +198,9 @@ class App(tk.Tk):
         ttk.Button(header,text='Report a Bug',command=self.report_bug).pack(side='right')
         ttk.Label(self,text='Create and repair your chaptered .m4b audiobook file. Your source files are never changed.').pack(anchor='w',padx=24)
         tabs=ttk.Notebook(self); tabs.pack(fill='both',expand=True,padx=20,pady=16)
-        self.create=ttk.Frame(tabs,padding=18); self.fix=ttk.Frame(tabs,padding=18); tabs.add(self.create,text='  Create Audiobook  '); tabs.add(self.fix,text='  Fix Chapters  ')
-        self.make_create(); self.make_fix(); self.protocol('WM_DELETE_WINDOW',self.on_close); self.after(150,self.poll); self.after(1000,self.tick)
+        self.create=ttk.Frame(tabs,padding=18); self.combine=ttk.Frame(tabs,padding=18); self.fix=ttk.Frame(tabs,padding=18)
+        tabs.add(self.create,text='  Create Audiobook  '); tabs.add(self.combine,text='  Combine MP3s  '); tabs.add(self.fix,text='  Fix Chapters  ')
+        self.make_create(); self.make_combine(); self.make_fix(); self.protocol('WM_DELETE_WINDOW',self.on_close); self.after(150,self.poll); self.after(1000,self.tick)
         if len(sys.argv)>1:
             self.source.set(str(Path(sys.argv[1]).resolve())); self.after(100,self.inspect_selected_mp3)
 
@@ -245,6 +259,105 @@ class App(tk.Tk):
         ttk.Button(row,text='Add near time…',command=self.add_near).pack(side='left'); ttk.Button(row,text='Edit…',command=self.edit).pack(side='left',padx=6); ttk.Button(row,text='Delete',command=self.delete).pack(side='left'); ttk.Button(row,text='Save repaired .m4b file',style='Accent.TButton',command=self.rebuild).pack(side='right')
         self.fixstatus=tk.StringVar(value='Load your .m4b file and its chapter text file.'); ttk.Label(self.fix,textvariable=self.fixstatus,foreground='#555').pack(anchor='w')
 
+    def make_combine(self):
+        ttk.Label(self.combine,text='Combine multiple MP3 files into one chaptered .m4b',font=('Segoe UI Semibold',12)).pack(anchor='w')
+        ttk.Label(self.combine,text='Each MP3 becomes one chapter. Arrange the files in listening order; your originals are never changed.',foreground='#555').pack(anchor='w',pady=(3,10))
+        self.combine_files=[]
+        self.combine_tree=ttk.Treeview(self.combine,columns=('number','title','file'),show='headings',height=11)
+        self.combine_tree.heading('number',text='#'); self.combine_tree.heading('title',text='Chapter title'); self.combine_tree.heading('file',text='MP3 file')
+        self.combine_tree.column('number',width=42,anchor='center',stretch=False); self.combine_tree.column('title',width=210); self.combine_tree.column('file',width=380)
+        self.combine_tree.pack(fill='both',expand=True); self.combine_tree.bind('<Double-1>',lambda _event:self.edit_combine_title())
+        buttons=ttk.Frame(self.combine); buttons.pack(fill='x',pady=(8,12))
+        ttk.Button(buttons,text='Add MP3 files…',command=self.add_combine_files).pack(side='left')
+        ttk.Button(buttons,text='Edit title…',command=self.edit_combine_title).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Remove',command=self.remove_combine_file).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Move up',command=lambda:self.move_combine_file(-1)).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Move down',command=lambda:self.move_combine_file(1)).pack(side='left',padx=(6,0))
+        ttk.Button(buttons,text='Clear',command=self.clear_combine_files).pack(side='left',padx=(6,0))
+        output_row=ttk.Frame(self.combine); output_row.pack(fill='x')
+        ttk.Label(output_row,text='Save as:').pack(side='left'); self.combine_output=tk.StringVar()
+        ttk.Entry(output_row,textvariable=self.combine_output).pack(side='left',fill='x',expand=True,padx=8)
+        ttk.Button(output_row,text='Browse…',command=self.choose_combine_output).pack(side='left')
+        actions=ttk.Frame(self.combine); actions.pack(fill='x',pady=(12,7))
+        self.combine_start_button=ttk.Button(actions,text='Start - Combine Into One Audiobook',style='Accent.TButton',command=self.start_combine); self.combine_start_button.pack(side='left')
+        self.combine_cancel_button=ttk.Button(actions,text='Cancel',command=self.cancel_job,state='disabled'); self.combine_cancel_button.pack(side='left',padx=8)
+        self.combine_status=tk.StringVar(value='Add two or more MP3 files to begin.'); ttk.Label(self.combine,textvariable=self.combine_status).pack(anchor='w')
+        self.combine_progress=ttk.Progressbar(self.combine,mode='determinate',maximum=100); self.combine_progress.pack(fill='x',pady=(5,0))
+
+    def refresh_combine_files(self,select=None):
+        self.combine_tree.delete(*self.combine_tree.get_children())
+        for index,item in enumerate(self.combine_files,1):
+            self.combine_tree.insert('','end',iid=str(index-1),values=(index,item['title'],Path(item['path']).name))
+        if select is not None and self.combine_files:
+            iid=str(max(0,min(select,len(self.combine_files)-1))); self.combine_tree.selection_set(iid); self.combine_tree.see(iid)
+
+    def add_combine_files(self):
+        paths=filedialog.askopenfilenames(filetypes=[('MP3 audiobook parts','*.mp3')])
+        if not paths:return
+        existing={item['path'].lower() for item in self.combine_files}
+        for path in sorted(paths,key=natural_key):
+            if path.lower() not in existing:
+                self.combine_files.append({'path':path,'title':filename_chapter_title(path,len(self.combine_files)+1)}); existing.add(path.lower())
+        if not self.combine_output.get() and self.combine_files:
+            folder=Path(self.combine_files[0]['path']).parent; self.combine_output.set(str(folder/(folder.name+'.m4b')))
+        self.refresh_combine_files(); self.combine_status.set(f'{len(self.combine_files)} MP3 files — each file will become one chapter.')
+
+    def remove_combine_file(self):
+        selected=self.combine_tree.selection()
+        if selected:self.combine_files.pop(int(selected[0])); self.refresh_combine_files()
+    def edit_combine_title(self):
+        selected=self.combine_tree.selection()
+        if not selected:return
+        index=int(selected[0]); title=simpledialog.askstring('Chapter title','Chapter title:',initialvalue=self.combine_files[index]['title'])
+        if title and title.strip():self.combine_files[index]['title']=title.strip(); self.refresh_combine_files(index)
+    def clear_combine_files(self):
+        self.combine_files=[]; self.refresh_combine_files(); self.combine_status.set('Add two or more MP3 files to begin.')
+    def move_combine_file(self,direction):
+        selected=self.combine_tree.selection()
+        if not selected:return
+        old=int(selected[0]); new=old+direction
+        if 0<=new<len(self.combine_files):self.combine_files[old],self.combine_files[new]=self.combine_files[new],self.combine_files[old]; self.refresh_combine_files(new)
+    def choose_combine_output(self):
+        initial=Path(self.combine_output.get()) if self.combine_output.get() else Path.cwd()/'Audiobook.m4b'
+        selected=filedialog.asksaveasfilename(defaultextension='.m4b',filetypes=[('.m4b audiobook file','*.m4b')],initialdir=str(initial.parent),initialfile=initial.name)
+        if selected:self.combine_output.set(selected)
+
+    def start_combine(self):
+        if self.running:return messagebox.showinfo('Please wait','Another audiobook job is already running.')
+        if len(self.combine_files)<2:return messagebox.showerror('Add MP3 files','Add at least two MP3 files to combine.')
+        if not self.combine_output.get().strip():return messagebox.showerror('Choose where to save','Choose a name and location for the finished .m4b file.')
+        output=Path(self.combine_output.get())
+        if output.suffix.lower()!='.m4b':output=output.with_suffix('.m4b'); self.combine_output.set(str(output))
+        if output.exists() and not messagebox.askyesno('Replace existing file',f'This file already exists:\n\n{output}\n\nReplace it?'):return
+        self.running=True; self.cancelled=False; self.started_at=time.time(); self.combine_start_button.configure(state='disabled'); self.combine_cancel_button.configure(state='normal'); self.combine_progress['value']=0; self.combine_status.set('Reading MP3 information…')
+        items=[dict(item) for item in self.combine_files]
+        def work():
+            try:
+                lengths=[duration(Path(item['path'])) for item in items]; total=sum(lengths); rate=min(96000,min(audio_bitrate(Path(item['path'])) for item in items))
+                with tempfile.TemporaryDirectory(prefix='audiobook-combine-') as temp:
+                    temp=Path(temp); concat=temp/'files.ffconcat'; meta=temp/'chapters.ffmetadata'; working=output.with_suffix('.working.m4b')
+                    concat_lines=['ffconcat version 1.0']
+                    for item in items:concat_lines.append("file '"+Path(item['path']).as_posix().replace("'","'\\''")+"'")
+                    concat.write_text('\n'.join(concat_lines)+'\n',encoding='utf-8')
+                    chapter_lines=[';FFMETADATA1',f'title={esc(output.stem)}']; start=0.0
+                    for item,length in zip(items,lengths):
+                        chapter_lines += ['[CHAPTER]','TIMEBASE=1/1000',f'START={int(start*1000)}',f'END={int((start+length)*1000)}',f"title={esc(item['title'])}"]; start+=length
+                    meta.write_text('\n'.join(chapter_lines)+'\n',encoding='utf-8')
+                    command=['ffmpeg','-hide_banner','-y','-f','concat','-safe','0','-i',str(concat),'-i',str(meta),'-map','0:a:0','-map_metadata','1','-map_chapters','1','-c:a','aac','-b:a',str(rate),'-movflags','+faststart','-progress','pipe:1','-nostats',str(working)]
+                    proc=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,creationflags=NO_WINDOW); self.job_proc=proc
+                    for line in proc.stdout:
+                        if line.startswith('out_time='):
+                            try:self.q.put(('combine_progress',min(99,100*seconds(line.split('=',1)[1])/max(1,total))))
+                            except ValueError:pass
+                    if proc.wait():raise RuntimeError('FFmpeg could not combine these MP3 files. Make sure every selected file plays correctly.')
+                    working.replace(output)
+                self.q.put(('combine_done',f'Created {len(items)} chapters at {rate/1000:g} kbps.\n\nSaved as:\n{output}'))
+            except Exception as e:
+                try:output.with_suffix('.working.m4b').unlink(missing_ok=True)
+                except OSError:pass
+                self.q.put(('combine_failed',str(e)))
+        threading.Thread(target=work,daemon=True).start()
+
     def write(self,s): self.q.put(('log',s))
     def poll(self):
         try:
@@ -265,6 +378,12 @@ class App(tk.Tk):
                 elif kind=='job_done': self.finish_job(cancelled=False); messagebox.showinfo('Finished',val)
                 elif kind=='failed': self.finish_job(error=True); messagebox.showerror('Problem',val)
                 elif kind=='retry_offer': self.finish_job(error=True); self.offer_retry(*val)
+                elif kind=='combine_progress': self.combine_progress['value']=val; self.combine_status.set(f'Creating your .m4b file… {int(val)}%')
+                elif kind=='combine_done': self.finish_combine(); self.combine_progress['value']=100; self.combine_status.set('Finished'); messagebox.showinfo('Finished',val)
+                elif kind=='combine_failed':
+                    self.finish_combine(); self.combine_progress['value']=0
+                    if self.cancelled:self.combine_status.set('Cancelled — original MP3 files were not changed.')
+                    else:self.combine_status.set('Stopped because of a problem'); messagebox.showerror('Problem',val)
         except queue.Empty: pass
         self.after(150,self.poll)
 
@@ -290,9 +409,12 @@ class App(tk.Tk):
         elif error: self.progress['value']=0; self.last_percent=0; self.job_status.set('Stopped because of a problem')
         else: self.progress['value']=100; self.last_percent=100; self.job_status.set('Finished')
 
+    def finish_combine(self):
+        self.running=False; self.job_proc=None; self.combine_start_button.configure(state='normal'); self.combine_cancel_button.configure(state='disabled')
+
     def cancel_job(self):
         if not self.running or not messagebox.askyesno('Cancel processing','Stop the current audiobook job?\n\nThe original MP3 will remain unchanged.'): return
-        self.cancelled=True; self.job_status.set('Cancelling…'); proc=self.job_proc
+        self.cancelled=True; self.job_status.set('Cancelling…'); self.combine_status.set('Cancelling…'); proc=self.job_proc
         if proc and proc.poll() is None:
             try:
                 if sys.platform=='win32': subprocess.run(['taskkill','/PID',str(proc.pid),'/T','/F'],capture_output=True,creationflags=NO_WINDOW)
