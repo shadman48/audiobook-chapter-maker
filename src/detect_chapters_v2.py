@@ -41,6 +41,18 @@ def probe_duration(path: Path) -> float:
     return float(out.stdout.strip())
 
 
+def output_audio_bitrate(path: Path) -> int:
+    """Use at most the source audio bitrate and never exceed 96 kbps."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=bit_rate", "-of", "default=nw=1:nk=1", str(path)],
+        check=True, capture_output=True, text=True, creationflags=NO_WINDOW,
+    )
+    try: source_rate = int(out.stdout.strip())
+    except ValueError:
+        source_rate = int(path.stat().st_size * 8 / max(1.0, probe_duration(path)))
+    return max(1, min(96000, source_rate))
+
+
 def probe_embedded_chapters(path: Path, duration: float) -> list[tuple[float, str]]:
     """Return trustworthy chapter starts already stored in the source file."""
     out = subprocess.run(
@@ -514,7 +526,9 @@ def main() -> int:
     meta_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("Step 3/3: creating your .m4b file...")
     working = output.with_suffix(".working.m4b")
-    subprocess.run(["ffmpeg", "-hide_banner", "-y", "-i", str(source), "-i", str(meta_file), "-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(working)], check=True, creationflags=NO_WINDOW)
+    bitrate = output_audio_bitrate(source)
+    print(f"Audio quality: using {bitrate/1000:g} kbps AAC (never higher than the source MP3 or 96 kbps).", flush=True)
+    subprocess.run(["ffmpeg", "-hide_banner", "-y", "-i", str(source), "-i", str(meta_file), "-map", "0:a:0", "-map_metadata", "1", "-map_chapters", "1", "-c:a", "aac", "-b:a", str(bitrate), "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(working)], check=True, creationflags=NO_WINDOW)
     working.replace(output)
     print(f"Your .m4b file: {output}\nChapters: {chapter_file}\nOriginal: unchanged")
     return 0

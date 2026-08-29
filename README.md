@@ -24,6 +24,7 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 - Scan one minute near an approximate timestamp to recover a missing chapter
 - Repair an existing `.m4b` without re-encoding its audio
 - Preserves the original MP3 and earlier audiobook files
+- Caps AAC output at the source MP3 bitrate (and 96 kbps maximum), avoiding larger files that cannot improve the original audio
 - Silent Windows launcher with progress shown inside the app
 - Real progress and activity indicators, elapsed time, and estimated time remaining
 - Long-book warning, cancellation, and protection against accidental closing
@@ -80,6 +81,8 @@ Use the visible **Report a Bug** button in the app. It opens a guided GitHub iss
 ## Privacy
 
 Audio processing and opening-audio identification run locally. The application never uploads audiobook audio and does not call ChatGPT or another cloud AI service. The optional book-information lookup sends text metadata inferred from MP3 tags, filenames/folders, or the locally transcribed opening to the project catalogue, Open Library, and Google Books. Successful references are cached under Local AppData.
+
+Creating a new `.m4b` requires converting MP3 audio to AAC for broad audiobook-player compatibility. The app reads the source audio bitrate and never selects a higher output bitrate; it also caps audiobook output at 96 kbps. Editing chapter markers in an existing `.m4b` uses stream copying and does not re-encode its audio.
 
 ## Current status
 
