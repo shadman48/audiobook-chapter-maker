@@ -99,6 +99,8 @@ A simple Windows app that detects spoken chapter headings in audiobook MP3s and 
 3. Double-click **Start Audiobook Maker V3.vbs**.
 4. Choose an audiobook MP3 and follow the prompts.
 
+The downloadable V3.48 ZIP has a simplified layout. Double-click **Start Audiobook Maker.vbs** at the top level. The technical scripts and private Python environment stay inside the `app` folder, which ordinary users can ignore.
+
 To combine a folder of audiobook parts, open **Combine MP3s**, add the files, check their order and titles, choose the output name, and press **Start - Combine Into One Audiobook**. Each MP3 becomes one chapter, and the originals remain unchanged.
 
 The first run checks for Python and FFmpeg and creates a private Python environment. Whisper components and the speech model require an internet connection the first time they are installed or downloaded.
